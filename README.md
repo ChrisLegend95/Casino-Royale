@@ -1,3 +1,5 @@
+#link [https://chrislegend95.github.io/Casino-Royale/]
+
 # 🎰 Gamble Casino
 
 A collection of free-to-play casino-style and risk-based games made for fun, excitement, and a little bit of luck.
