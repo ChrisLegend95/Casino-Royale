@@ -234,10 +234,15 @@ export default {
       const weights = weightsFor(luck);
       const ids = [];
       const glyphs = [];
-      for (let i = 0; i < 3; i++) {
+      if (app.cheat) {
         const idx = weightedPickIndex(weights);
-        ids.push(SYMBOLS[idx].id);
-        glyphs.push(SYMBOLS[idx].glyph);
+        for (let i = 0; i < 3; i++) { ids.push(SYMBOLS[idx].id); glyphs.push(SYMBOLS[idx].glyph); }
+      } else {
+        for (let i = 0; i < 3; i++) {
+          const idx = weightedPickIndex(weights);
+          ids.push(SYMBOLS[idx].id);
+          glyphs.push(SYMBOLS[idx].glyph);
+        }
       }
       const win = evaluate(ids);
 

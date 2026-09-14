@@ -262,7 +262,21 @@ export default {
 
       const sorted = norm.slice().sort((a, b) => a - b);
       const rank = norm.map((t) => sorted.indexOf(t));
-      const finishPos = norm.map((t) => 1 / t);
+      let finishPos = norm.map((t) => 1 / t);
+      if (app.cheat) {
+        /* reward rig: the backed runner reaches the line first and the field
+           \\u2014 the fair winner dropped to the back \\u2014 falls away behind it */
+        const fairWinner = winnerIdx;
+        const others = [];
+        for (let i = 0; i < N; i++) if (i !== selected) others.push(i);
+        others.sort((a, b) => times[a] - times[b]);
+        const tail = others.filter((i) => i !== fairWinner);
+        tail.push(fairWinner);
+        const order = [selected].concat(tail);
+        finishPos = new Array(N).fill(0);
+        for (let k = 0; k < order.length; k++) finishPos[order[k]] = 1 - k * 0.052;
+        winnerIdx = selected;
+      }
       frameProgress = finishPos;
 
       if (instant) {

@@ -5,7 +5,7 @@ import { state, saveState, CONFIG } from "../state.js";
 import { sfx } from "../audio.js";
 import {
   FROG_CONST, mulberry32, makeLane, stepLane, laneCars, laneHit, timeUntilHit,
-  clearFor, aimMargin, multFor, overlappedLanes, blockSecFor,
+  clearFor, multFor, overlappedLanes, blockSecFor,
 } from "./frogger-math.js";
 
 /* =========================================================
@@ -13,10 +13,9 @@ import {
 
    The frog sits on a fixed column and its ONLY controls are
    CROSS (hop up one lane) and BANK (take the money and run).
-   It is stepped one lane onto the road for free (where it is
-   exactly even), and every lane it chooses to cross after that
-   pays more than the last: x1.20, x1.40, ... climbing to x10
-   by the tenth lane and x20 by the twentieth.
+   It starts safe on the verge at x1.00, and every lane it
+   crosses adds a flat x0.05 -- a straight line running from
+   x1.50 by the tenth lane to exactly x2.00 by the twentieth.
 
    Traffic is irregular: each lane is a little convoy of cars
    with randomly-sized widths and randomly-sized gaps, looping
@@ -55,12 +54,12 @@ export default {
   minBet: 1,
   blurb: "A frog, an endless road, and one button. Cross lanes to climb the payout ladder \u2014 then decide whether to bank.",
   payoutNote: () =>
-    "A free first step puts you on the road at <b>\u00D71.00</b>, and every lane you choose to cross after that " +
-    "pays more than the last: <b>\u00D71.20</b>, then <b>\u00D71.40</b>, climbing to <b>\u00D710</b> by your tenth " +
-    "lane and <b>\u00D720</b> by your twentieth. Traffic is irregular and you can watch it coming: if one reaches your column " +
-    "you're flattened. <b>CROSS</b> to hop, <b>BANK</b> to keep what you've got. " +
+    "You start safe on the verge at <b>\u00D71.00</b>, and every lane you cross adds a flat <b>+0.05</b>: " +
+    "<b>\u00D71.05</b> after one lane, <b>\u00D71.50</b> by your tenth and <b>\u00D72.00</b> by your twentieth \u2014 " +
+    "and it keeps climbing. Traffic is irregular and you can watch it coming: if one reaches your column " +
+    "you're flattened, and the whole stake is lost. <b>CROSS</b> to hop, <b>BANK</b> to keep what you've got. " +
     "Land in a gap and the road <b>blocks the lane behind you</b>, buying a short safe pocket to stand in " +
-    "— shorter the deeper you go, so standing still never stays free. Jump while a car is coming and " +
+    "\u2014 shorter the deeper you go, so standing still never stays free. Jump while a car is coming and " +
     "you get splatted.",
 
   create(app) {
@@ -82,7 +81,7 @@ export default {
 
     const hudMult = el("span", { text: "1.00" });
     const hudLanes = el("span", { text: "1" });
-    const hudNext = el("span", { text: "1.20" });
+    const hudNext = el("span", { text: "1.05" });
     const hudBest = el("span", { text: "1.00" });
     const dangerFill = el("i");
     const dangerLabel = el("span", { class: "fd-label", text: "ROAD CLEAR" });
@@ -225,24 +224,26 @@ export default {
     }
 
     function startRun() {
-      const margin = C.initLo + Math.random() * (C.initHi - C.initLo);
-      aimMargin(ensureLane(1), C.frogX, C.frogHalfW, margin + C.hopSec);
-      frog.lane = 0; frog.y = 0; frog.from = 0; frog.to = 1; frog.t = 0;
-      frog.state = "hop"; frog.hop = 0;
-      depth = 0; camY = 0; queued = null;
+      // the frog begins resting on the verge, exactly even at x1.00 -- the
+      // first lane is a crossing the player has to choose, not a free step
+      frog.lane = 0; frog.y = 0; frog.from = 0; frog.to = 0; frog.t = 0;
+      frog.state = "rest"; frog.rest = C.settleSec; frog.hop = 0; frog.arc = 0;
+      depth = 0; camY = 0; queued = null; blockT = 0;
       phase = "run";
       crossBtn.disabled = false;
       bankBtn.disabled = false;
       sfx.ready();
       statusEl.className = "frogger-status";
-      statusEl.textContent = "CROSS \u2014 the traffic is coming";
+      statusEl.textContent = "ON THE VERGE \u2014 cross when the first lane opens";
+      refreshHud();
+      refreshDanger();
     }
 
     function onLanded() {
       if (frog.lane > 0) {
         depth = frog.lane;
         blockT = blockSecFor(depth);
-        if (frog.lane > 1) float(multText(multFor(depth)), frog.y + 0.35, "good");
+        if (frog.lane >= 1) float(multText(multFor(depth)), frog.y + 0.35, "good");
         sfx.hop();
         const prev = lanes[frog.lane - 1];
         if (prev && frog.lane > 1 && timeUntilHit(prev, C.frogX, C.frogHalfW) < 0.4 && Math.random() < 0.5) {
@@ -738,11 +739,12 @@ export default {
         const ref = blockT > 0
           ? Math.max(0.001, blockSecFor(Math.max(1, frog.lane)))
           : Math.max(0.85, lanes[frog.lane] ? lanes[frog.lane].cw : C.cwLo);
-        const f = blockT > 0 ? 1 : clamp(t / ref, 0, 1);
+        const safe = blockT > 0 || frog.lane === 0;
+        const f = safe ? 1 : clamp(t / ref, 0, 1);
         ctx.save();
         ctx.lineWidth = Math.max(2.5, laneH * 0.07);
         ctx.lineCap = "round";
-        ctx.strokeStyle = blockT > 0
+        ctx.strokeStyle = safe
           ? "rgba(93,243,180,.8)"
           : t < 0.3 ? "rgba(255,74,60,.95)" : "rgba(255,193,78,.9)";
         ctx.beginPath();
@@ -974,7 +976,7 @@ export default {
       const ladder = el("div", { class: "ic-ladder" },
         ...LANES.map((d) => {
           const m = multFor(d);
-          return el("div", { class: "rung" + (m >= 10 ? " hot" : "") },
+          return el("div", { class: "rung" + (m >= 1.5 ? " hot" : "") },
             el("span", { text: "LANE " + d }),
             el("span", { class: "bar", style: { width: Math.max(3, (m / maxM) * 100) + "%" } }),
             el("span", { class: "v", text: "\u00D7" + m.toFixed(2) })
@@ -989,7 +991,8 @@ export default {
 
       const kvRow = (k, v) => el("div", { class: "row" }, el("span", { text: k }), el("span", { class: "v", text: v }));
       const kv = el("div", { class: "ic-kv" },
-        kvRow("Free step onto the road", "\u00D7" + C.startMult.toFixed(2)),
+        kvRow("Start on the verge", "\u00D7" + C.startMult.toFixed(2)),
+        kvRow("Every lane crossed", "+" + C.perHop.toFixed(2)),
         kvRow("Lane 1 safe pocket", blockSecFor(1).toFixed(2) + "s"),
         kvRow("Lane 10 safe pocket", blockSecFor(10).toFixed(2) + "s"),
         kvRow("Deepest safe pocket", C.blockMin.toFixed(2) + "s")
@@ -1000,16 +1003,16 @@ export default {
         el("div", { class: "ic-col" },
           sec("How you play",
             ul([
-              "You are stepped one lane onto the road for free, where you are exactly even at <b>\u00D7" + C.startMult.toFixed(2) + "</b>.",
-              "<b>CROSS</b> hops one lane further out \u2014 every lane you choose pays more than the last.",
+              "You begin safe on the verge, exactly even at <b>\u00D7" + C.startMult.toFixed(2) + "</b> \u2014 banking there just returns your stake.",
+              "<b>CROSS</b> hops one lane out, and every lane you cross adds <b>+" + C.perHop.toFixed(2) + "</b> to the payout.",
               "<b>BANK</b> takes the money and ends the run. It is always safe, and you can take it on any lane.",
             ])
           ),
           sec("The ladder",
             ul([
-              "The first two chosen lanes are gentle: <b>\u00D7" + multFor(2).toFixed(2) + "</b>, then <b>\u00D7" + multFor(3).toFixed(2) + "</b>.",
-              "After that the prize compounds, reaching <b>\u00D7" + multFor(10).toFixed(2) + "</b> by your tenth lane.",
-              "From there it adds a flat <b>\u00D71 a lane</b>, so lane 20 is exactly <b>\u00D7" + multFor(20).toFixed(2) + "</b> \u2014 and it keeps climbing.",
+              "Every lane adds the same <b>+" + C.perHop.toFixed(2) + "</b>, so the ladder is a straight line \u2014 no jumps.",
+              "That is <b>\u00D7" + multFor(10).toFixed(2) + "</b> by your tenth lane and exactly <b>\u00D7" + multFor(20).toFixed(2) + "</b> by your twentieth.",
+              "It keeps climbing \u00D7" + C.perHop.toFixed(2) + " a lane from there, with no cap.",
             ])
           ),
           sec("Safe pockets",

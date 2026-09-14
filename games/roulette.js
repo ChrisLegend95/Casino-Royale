@@ -386,12 +386,29 @@ export default {
       const k = list.length;
       if (!k) return { multiplier: 0 };
 
-      let n = ORDER[randInt(0, 36)];
-      if (!list.some((s) => spotWins(s, n))) {
-        const chance = clamp(luck * 0.9, 0, 0.42);
-        if (chance > 0 && Math.random() < chance) {
-          const cover = numbersCovered();
-          if (cover.length) n = cover[randInt(0, cover.length - 1)];
+      let n;
+      if (app.cheat) {
+        /* reward rig: drop the ball onto the highest-paying spot the player
+           backed (share of the stake x its odds), then a number it covers */
+        const chips = allocate(stake, k);
+        let bi = 0;
+        for (let i = 1; i < k; i++) if (chips[i] * list[i].pay > chips[bi] * list[bi].pay) bi = i;
+        const spot = list[bi];
+        if (spot.kind === "number") {
+          n = spot.n;
+        } else {
+          const cands = [];
+          for (let x = 0; x <= 36; x++) if (spotWins(spot, x)) cands.push(x);
+          n = cands.length ? cands[randInt(0, cands.length - 1)] : ORDER[randInt(0, 36)];
+        }
+      } else {
+        n = ORDER[randInt(0, 36)];
+        if (!list.some((s) => spotWins(s, n))) {
+          const chance = clamp(luck * 0.9, 0, 0.42);
+          if (chance > 0 && Math.random() < chance) {
+            const cover = numbersCovered();
+            if (cover.length) n = cover[randInt(0, cover.length - 1)];
+          }
         }
       }
 

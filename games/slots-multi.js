@@ -597,7 +597,7 @@ export default {
       const instant = !!(opts && opts.instant);
       const luck = app.effects().luck;
       const activeLines = lines;
-      const seq = resolveSpinSequence(Math.random, luck, activeLines);
+      const seq = resolveSpinSequence(Math.random, luck, activeLines, { rig: app.cheat });
       const spins = seq.spins;
       const perLine = round2(stake);
       const totalSpins = spins.length - 1;

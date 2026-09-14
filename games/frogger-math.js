@@ -29,11 +29,8 @@ export const FROG_CONST = {
   settleSec: 0.12,    // dead time after landing before the next hop is allowed
   frogHalfW: 0.14,    // horizontal collision half-width, lane units (forgiving vs sprite)
   frogHalfH: 0.32,    // vertical collision half-height, lane units
-  startMult: 1.0,     // the free step onto the road leaves you exactly even
-  step2Mult: 1.2,     // the first lane you *choose* to cross
-  step3Mult: 1.4,     // the second lane you choose to cross
-  midLane: 10,        // ...compounding to x10 once you've crossed ten lanes
-  midMult: 10,
+  startMult: 1.0,     // you begin safe on the verge, exactly even
+  perHop: 0.05,       // every lane you cross adds this much (a flat linear ladder)
   roadW: 7,           // visible road width, lane units
   frogX: 3.5,         // the frog's fixed column
   maxLanes: 40,       // lanes generated up front
@@ -248,26 +245,18 @@ export function overlappedLanes(y, halfH, maxLane) {
   return out;
 }
 
-/* depth = lanes crossed from the verge. The frog is automatically stepped one
-   lane onto the road (where it is exactly even), and every lane it *chooses*
-   to cross pays more than the last:
+/* depth = lanes crossed from the verge (0 = still standing on the verge).
+   The ladder is a straight line: you start exactly even, and every lane you
+   cross adds a flat `perHop`, so the rungs land on
 
-     lanes  1     2     3     4     5     6     7     8     9     10   ...  20
-     mult   x1.00 x1.20 x1.40 x1.85 x2.46 x3.25 x4.31 x5.70 x7.55 x10.0 ... x20.0
+     lanes  0     1     2     3     4   ...  10    15    20   ...  40
+     mult   x1.00 x1.05 x1.10 x1.15 x1.20 ... x1.50 x1.75 x2.00 ... x3.00
 
-   The first two chosen lanes are the gentle x1.2 / x1.4 rungs, then the prize
-   compounds to x10 by the tenth lane; from there it adds a flat x1 per lane,
-   so the twentieth lane is exactly x20 and it keeps climbing after that. */
+   The twentieth lane is exactly x2.00 and it keeps climbing x0.05 a lane. */
 export function multFor(depth) {
   const C = FROG_CONST;
   const d = Math.max(0, depth);
-  if (d <= 1) return C.startMult;
-  if (d === 2) return C.step2Mult;
-  if (d === 3) return C.step3Mult;
-  if (d <= C.midLane) {
-    return C.step3Mult * Math.pow(C.midMult / C.step3Mult, (d - 3) / (C.midLane - 3));
-  }
-  return C.midMult + (d - C.midLane);
+  return C.startMult + C.perHop * d;
 }
 
 /* How long the road blocks traffic in the lane a frog has just landed in.

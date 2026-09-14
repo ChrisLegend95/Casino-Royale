@@ -121,6 +121,53 @@ export default {
       return c;
     }
 
+    /* ---------- reward rig helpers (only used while the ALWAYS WIN cheat is on) ---------- */
+    function refillShoe() {
+      if (shoe.length < 20) shoe = buildShoe(6);
+    }
+    /* pull a card that leaves the player at or under 21 (so a hit can never bust) */
+    function playerDraw() {
+      refillShoe();
+      const hand = player.cards;
+      let idx = -1;
+      for (let i = shoe.length - 1; i >= 0; i--) {
+        if (score(hand.concat(shoe[i])).total <= 21) { idx = i; break; }
+      }
+      if (idx < 0) idx = shoe.findIndex((x) => x.r === "A");
+      if (idx < 0) idx = shoe.length - 1;
+      const c = shoe.splice(idx, 1)[0];
+      shoeCountEl.textContent = String(shoe.length);
+      return c;
+    }
+    /* pull a card that pushes the dealer over 21 (or a big card toward it) */
+    function dealerBustCard() {
+      refillShoe();
+      const hand = dealer.cards;
+      let idx = -1;
+      for (let i = shoe.length - 1; i >= 0; i--) {
+        if (score(hand.concat(shoe[i])).total > 21) { idx = i; break; }
+      }
+      if (idx < 0) {
+        idx = shoe.findIndex((x) => cardValue(x) >= 10);
+        if (idx < 0) idx = shoe.length - 1;
+      }
+      const c = shoe.splice(idx, 1)[0];
+      shoeCountEl.textContent = String(shoe.length);
+      return c;
+    }
+    /* a dealer card that keeps the two-card hand below a natural blackjack */
+    function dealerNonBJCard() {
+      refillShoe();
+      let idx = -1;
+      for (let i = shoe.length - 1; i >= 0; i--) {
+        if (score([dealer.cards[0], shoe[i]]).total < 21) { idx = i; break; }
+      }
+      if (idx < 0) idx = shoe.length - 1;
+      const c = shoe.splice(idx, 1)[0];
+      shoeCountEl.textContent = String(shoe.length);
+      return c;
+    }
+
     function makeCard(c, isHole) {
       const suit = SUITS[c.s];
       const front = el("div", { class: "card-face front" + (suit.red ? " red" : "") },
@@ -288,6 +335,10 @@ export default {
       msgEl.textContent = "";
       player.cards.push(drawCard(), drawCard());
       dealer.cards.push(drawCard(), drawCard());
+      if (app.cheat) {
+        let guard = 0;
+        while (isBJ(dealer.cards) && guard++ < 12) dealer.cards[1] = dealerNonBJCard();
+      }
       render();
       dealt = true;
 
@@ -326,7 +377,7 @@ export default {
         if (a === "double") {
           if (player.cards.length === 2 && app.spend(stake)) {
             doubled = true;
-            player.cards.push(drawCard());
+            player.cards.push(app.cheat ? playerDraw() : drawCard());
             render();
             if (!instant) await sleep(320);
             if (score(player.cards).total > 21) busted = true;
@@ -334,7 +385,8 @@ export default {
           }
           continue;
         }
-        player.cards.push(drawCard());
+        if (app.cheat && score(player.cards).total >= 21) { stood = true; break; }
+        player.cards.push(app.cheat ? playerDraw() : drawCard());
         render();
         if (!instant) await sleep(280);
         if (score(player.cards).total > 21) busted = true;
@@ -369,10 +421,19 @@ export default {
       hidden = false;
       render();
       if (!instant) await sleep(420);
-      while (score(dealer.cards).total < 17) {
-        dealer.cards.push(drawCard());
-        render();
-        if (!instant) await sleep(360);
+      if (app.cheat) {
+        let guard = 0;
+        while (score(dealer.cards).total <= 21 && guard++ < 30) {
+          dealer.cards.push(dealerBustCard());
+          render();
+          if (!instant) await sleep(360);
+        }
+      } else {
+        while (score(dealer.cards).total < 17) {
+          dealer.cards.push(drawCard());
+          render();
+          if (!instant) await sleep(360);
+        }
       }
 
       const p = score(player.cards).total;

@@ -83,6 +83,22 @@ export function spinGrid(rng, luck) {
   return grid;
 }
 
+/* reward rig: fill one active payline with five of the same paying symbol, so
+   the base spin always resolves to a real win while everything else stays random */
+export function riggedBaseGrid(rng, luck, activeLines) {
+  const n = activeLines || MAX_LINES;
+  const grid = spinGrid(rng, luck);
+  const li = Math.min(n - 1, Math.floor(rng() * n));
+  const line = LINES[li];
+  let total = 0;
+  for (const s of SYMBOLS) total += s.w;
+  let r = rng() * total;
+  let sym = SYMBOLS[SYMBOLS.length - 1];
+  for (const s of SYMBOLS) { r -= s.w; if (r <= 0) { sym = s; break; } }
+  for (let c = 0; c < REELS; c++) grid[line[c]][c] = sym.id;
+  return grid;
+}
+
 export function linePay(symId, run) {
   const s = SYMBOL_BY_ID[symId];
   if (!s) return 0;
@@ -139,7 +155,7 @@ export function spinWinUnits(ev, activeLines) {
   return ev.wins.reduce((a, w) => a + w.pay, 0) + ev.scatterPay * n;
 }
 
-export function resolveSpinSequence(rng, luck, activeLines) {
+export function resolveSpinSequence(rng, luck, activeLines, opts) {
   const n = activeLines || MAX_LINES;
   const lm = luckMultFor(luck);
   const spins = [];
@@ -148,7 +164,7 @@ export function resolveSpinSequence(rng, luck, activeLines) {
   let awarded = 0;
   let remaining = 0;
 
-  const baseGrid = spinGrid(rng, luck);
+  const baseGrid = opts && opts.rig ? riggedBaseGrid(rng, luck, n) : spinGrid(rng, luck);
   const baseEv = evaluateGrid(baseGrid, n, lm);
   const baseScatterUnits = baseEv.scatterPay * n;
   lineUnits += baseEv.wins.reduce((a, w) => a + w.pay, 0);

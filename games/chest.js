@@ -191,6 +191,11 @@ export default {
         }
         if (i < 0) { busy = false; return { multiplier: 1 }; }
         picked++;
+        if (app.cheat && i !== star) {
+          /* reward rig: whatever the player opened is now the top prize */
+          const hi = slots.indexOf(CONFIG.chestHigh);
+          if (hi !== -1 && hi !== i) { const t = slots[i]; slots[i] = slots[hi]; slots[hi] = t; }
+        }
         revealChest(i, false);
         if (i === star) {
           spent.add(i);

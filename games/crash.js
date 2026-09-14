@@ -13,7 +13,7 @@ export default {
   blurb: "The multiplier climbs. Cash out before the rocket blows up.",
   payoutNote: () =>
     'Cash out before the crash and you get <b>bet \u00D7 multiplier</b>. Base return <span class="k">97%</span>. ' +
-    "Set an auto cash-out target to play hands-free. Lucky Coin perks push the rocket a little higher.",
+    "Flip <b>AUTO</b> on to bank at a target hands-free, or leave it off and hit <b>CASH OUT</b> yourself. Lucky Coin perks push the rocket higher.",
   minBet: 1,
   canIdle: false,
 
@@ -24,6 +24,7 @@ export default {
     const historyEl = el("div", { class: "crash-history" }, el("span", { class: "panel-head", text: "HISTORY" }));
 
     const targetInput = el("input", { type: "number", min: "1.01", step: "0.01", value: "2.00" });
+    const autoBtn = el("button", { class: "autotoggle on", type: "button", text: "AUTO: ON", onclick: () => setAuto(!autoCash) });
     const cashBtn = el("button", { class: "cashbtn", type: "button", text: "CASH OUT", disabled: true, onclick: () => cashOut() });
     const msgEl = el("div", { class: "bj-msg", text: "Set your target, then LAUNCH." });
 
@@ -36,8 +37,8 @@ export default {
         box,
         el("div", { class: "crash-bar" },
           el("div", { class: "crash-field" },
-            el("div", { class: "label" }, "Auto cash-out"),
-            targetInput
+            el("div", { class: "label" }, "Cash out"),
+            el("div", { class: "crash-mode" }, autoBtn, targetInput)
           ),
           cashBtn,
           historyEl
@@ -54,6 +55,7 @@ export default {
     let tMax = 1;
     let trail = [];
     let stars = [];
+    let autoCash = true;
 
     /* ---------- canvas ---------- */
     function initCanvas() {
@@ -103,9 +105,12 @@ export default {
         const y = y0 - (plotH * i) / 5;
         ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 + plotW, y); ctx.stroke();
       }
-      const topMult = Math.max(2.2, crashPoint * 1.05, curMult * 1.05);
+      const live = !Number.isFinite(crashPoint);
+      const refCap = live ? Math.max(2.2, curMult * 1.5) : crashPoint;
+      const topMult = Math.max(2.2, refCap * 1.05, curMult * 1.05);
       const lg = Math.log(topMult);
-      const px = (t) => x0 + clamp(t / tMax, 0, 1) * plotW;
+      const effTMax = live ? Math.max(1, Math.log(Math.max(1.5, curMult * 1.5)) / RATE) : tMax;
+      const px = (t) => x0 + clamp(t / effTMax, 0, 1) * plotW;
       const py = (m) => y0 - (Math.log(Math.max(1, m)) / lg) * plotH;
 
       if (trail.length > 1) {
@@ -200,7 +205,7 @@ export default {
         multEl.textContent = mult.toFixed(2) + "x";
         msgEl.className = "bj-msg win";
         msgEl.textContent = "Cashed out at " + mult.toFixed(2) + "x!";
-        history.unshift(crashPoint);
+        history.unshift(Number.isFinite(crashPoint) ? crashPoint : mult);
         while (history.length > 10) history.pop();
         renderHistory();
         draw(false, true, 0);
@@ -218,10 +223,23 @@ export default {
       return Number.isFinite(v) && v >= 1.01 ? v : 2;
     }
 
+    function setAuto(on) {
+      autoCash = !!on;
+      autoBtn.textContent = "AUTO: " + (autoCash ? "ON" : "OFF");
+      autoBtn.classList.toggle("on", autoCash);
+      targetInput.disabled = !autoCash;
+      if (!live) {
+        msgEl.className = "bj-msg";
+        msgEl.textContent = autoCash
+          ? "Auto cash-out at " + target().toFixed(2) + "x \u2014 or hit CASH OUT. LAUNCH when ready."
+          : "Manual mode \u2014 hit CASH OUT before the rocket blows. LAUNCH when ready.";
+      }
+    }
+
     async function play(stake, opts) {
       const instant = !!(opts && opts.instant);
       const luck = app.effects().luck;
-      crashPoint = makeCrashPoint(luck);
+      crashPoint = app.cheat ? Infinity : makeCrashPoint(luck);
       const tgt = target();
 
       if (instant) {
@@ -231,7 +249,7 @@ export default {
           multEl.textContent = tgt.toFixed(2) + "x";
           msgEl.className = "bj-msg win";
           msgEl.textContent = "Auto cashed at " + tgt.toFixed(2) + "x";
-          history.unshift(crashPoint); while (history.length > 10) history.pop(); renderHistory();
+          history.unshift(Number.isFinite(crashPoint) ? crashPoint : tgt); while (history.length > 10) history.pop(); renderHistory();
           curMult = 1; trail = [{ t: 0, m: 1 }, { t: 1, m: tgt }]; tMax = 1;
           draw(false, true, 0);
           return { multiplier: tgt, crashPoint };
@@ -249,10 +267,12 @@ export default {
       multEl.className = "crash-mult";
       multEl.textContent = "1.00x";
       msgEl.className = "bj-msg";
-      msgEl.textContent = "Auto cash-out at " + tgt.toFixed(2) + "x \u2014 or hit CASH OUT.";
+      msgEl.textContent = autoCash
+        ? "Auto cash-out at " + tgt.toFixed(2) + "x \u2014 or hit CASH OUT."
+        : "Manual mode \u2014 hit CASH OUT before the rocket blows!";
       curMult = 1;
       trail = [{ t: 0, m: 1 }];
-      tMax = Math.max(1, Math.log(Math.max(1.5, crashPoint)) / RATE);
+      tMax = Math.max(1, Math.log(Math.max(1.5, Number.isFinite(crashPoint) ? crashPoint : 4)) / RATE);
       live = true;
       cashBtn.disabled = false;
 
@@ -271,7 +291,7 @@ export default {
           multEl.textContent = curMult.toFixed(2) + "x";
           trail.push({ t, m: curMult });
           if (trail.length > 400) trail.shift();
-          if (curMult >= tgt) {
+          if (autoCash && curMult >= tgt) {
             finish(true, curMult, "cash");
             return;
           }
@@ -319,10 +339,10 @@ export default {
               "Wait too long and the rocket blows up \u2014 you lose the whole bet.",
             ])
           ),
-          sec("Auto cash-out",
+          sec("Manual vs auto cash-out",
             ul([
-              "Set a target (default <b>2.00x</b>) and the rocket banks itself the instant it gets there.",
-              "A round only pays if the rocket actually <b>reaches</b> the target before crashing.",
+              "<b>AUTO: ON</b> — set a target (default <b>2.00x</b>) and the rocket banks itself the instant it reaches it.",
+              "<b>AUTO: OFF</b> — manual mode. The rocket climbs until <i>you</i> hit <b>CASH OUT</b>, or it blows up.",
               "Idle mode is off here \u2014 this table needs a human hand.",
             ])
           ),
