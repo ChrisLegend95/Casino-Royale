@@ -1,0 +1,1052 @@
+import { el } from "../ui.js";
+import { stageShell, clamp } from "./common.js";
+import { infoBtn, openInfo, sec, ul, note } from "./infocard.js";
+import { state, saveState, CONFIG } from "../state.js";
+import { sfx } from "../audio.js";
+import {
+  FROG_CONST, mulberry32, makeLane, stepLane, laneCars, laneHit, timeUntilHit,
+  clearFor, aimMargin, multFor, overlappedLanes, blockSecFor,
+} from "./frogger-math.js";
+
+/* =========================================================
+   Frogger Gamble — a tiny frog crosses an endless road.
+
+   The frog sits on a fixed column and its ONLY controls are
+   CROSS (hop up one lane) and BANK (take the money and run).
+   It is stepped one lane onto the road for free (where it is
+   exactly even), and every lane it chooses to cross after that
+   pays more than the last: x1.20, x1.40, ... climbing to x10
+   by the tenth lane and x20 by the twentieth.
+
+   Traffic is irregular: each lane is a little convoy of cars
+   with randomly-sized widths and randomly-sized gaps, looping
+   for ever. Nothing is hidden behind a dice roll -- you can
+   watch every bumper coming, and the frog's column is lit
+   green/red by whether the lane above is open long enough.
+
+   Landing in a gap makes the road BLOCK that lane behind you:
+   traffic in it holds still and you get a short safe pocket to
+   stand in. The pocket is a timer (shorter the deeper you go),
+   so stopping is never free -- once it lapses the lane starts
+   flowing again. Hopping while a car is coming still flattens
+   you mid-air, and banking is always safe.
+
+   The traffic model lives in frogger-math.js and can be
+   re-simulated headlessly (see README.md for the tuning notes).
+   ========================================================= */
+
+const C = FROG_CONST;
+const VIEW_LANES = 5.6;     // lane units visible vertically
+const FROG_SCREEN = 0.7;    // where the frog sits down the canvas
+const READY_SEC = 1.15;     // "road's clear" beat before the cars appear
+const FADE_SEC = 0.5;       // how long the traffic takes to arrive
+const HOP_LIFT = 0.42;      // sprite lift at the top of a hop, in lane units
+
+function multText(m) {
+  return "\u00D7" + m.toFixed(2);
+}
+
+export default {
+  id: "frogger",
+  name: "Frogger Gamble",
+  icon: "\u{1F438}",
+  action: "CROSS THE ROAD",
+  canIdle: false,
+  minBet: 1,
+  blurb: "A frog, an endless road, and one button. Cross lanes to climb the payout ladder \u2014 then decide whether to bank.",
+  payoutNote: () =>
+    "A free first step puts you on the road at <b>\u00D71.00</b>, and every lane you choose to cross after that " +
+    "pays more than the last: <b>\u00D71.20</b>, then <b>\u00D71.40</b>, climbing to <b>\u00D710</b> by your tenth " +
+    "lane and <b>\u00D720</b> by your twentieth. Traffic is irregular and you can watch it coming: if one reaches your column " +
+    "you're flattened. <b>CROSS</b> to hop, <b>BANK</b> to keep what you've got. " +
+    "Land in a gap and the road <b>blocks the lane behind you</b>, buying a short safe pocket to stand in " +
+    "— shorter the deeper you go, so standing still never stays free. Jump while a car is coming and " +
+    "you get splatted.",
+
+  create(app) {
+    if (!state.frogger || !Number.isFinite(state.frogger.bestDepth)) {
+      state.frogger = { bestDepth: 0, bestMult: C.startMult };
+    }
+    if (!Number.isFinite(state.frogger.bestMult) || state.frogger.bestMult < C.startMult) {
+      state.frogger.bestMult = C.startMult;
+    }
+    // the safe-pocket length is a root tunable so the machine can be made as
+    // punishing (short) or as safe (long) as the player wants
+    if (Number.isFinite(CONFIG.froggerBlockSec) && CONFIG.froggerBlockSec > 0) {
+      C.blockHi = CONFIG.froggerBlockSec;
+      C.blockMin = Math.min(C.blockMin, C.blockHi);
+    }
+
+    const canvas = el("canvas", { class: "frogger-canvas" });
+    const statusEl = el("div", { class: "frogger-status", text: "PRESS CROSS THE ROAD TO PLAY" });
+
+    const hudMult = el("span", { text: "1.00" });
+    const hudLanes = el("span", { text: "1" });
+    const hudNext = el("span", { text: "1.20" });
+    const hudBest = el("span", { text: "1.00" });
+    const dangerFill = el("i");
+    const dangerLabel = el("span", { class: "fd-label", text: "ROAD CLEAR" });
+
+    const crossBtn = el("button", { class: "fbtn cross", type: "button", "aria-label": "Cross" },
+      el("span", { class: "glyph", text: "\u25B2" }),
+      el("span", { class: "lbl", text: "CROSS" }),
+      el("span", { class: "key", text: "\u2191 / space" })
+    );
+    const bankBtn = el("button", { class: "fbtn bank", type: "button", "aria-label": "Bank" },
+      el("span", { class: "glyph", text: "\u20BF" }),
+      el("span", { class: "lbl", text: "BANK" }),
+      el("span", { class: "key", text: "\u2193 / enter" })
+    );
+
+    const root = stageShell(
+      "Frogger Gamble",
+      "Cross the road one lane at a time. Every lane pays more than the last \u2014 the cars are right there, so it's your call when to go.",
+      { info: infoBtn(() => openInfoCard()) },
+      el("div", { class: "frogger-wrap" },
+        el("div", { class: "slot-cabinet frogger-cab" },
+          el("div", { class: "slot-marquee" },
+            el("span", { class: "lights" }, el("i"), el("i"), el("i")),
+            el("span", { class: "marquee-title", text: "FROGGER GAMBLE" }),
+            el("span", { class: "sub", text: "1 PLAYER \u00B7 CLIMB THE LADDER" }),
+            el("span", { class: "lights" }, el("i"), el("i"), el("i"))
+          ),
+          el("div", { class: "frogger-hud" },
+            el("div", { class: "ahud" }, el("span", { class: "k", text: "Bank now" }),
+              el("span", { class: "v gold", text: "\u00D7" }, hudMult)),
+            el("div", { class: "ahud" }, el("span", { class: "k", text: "Lanes crossed" }),
+              el("span", { class: "v" }, hudLanes)),
+            el("div", { class: "ahud" }, el("span", { class: "k", text: "Next lane" }),
+              el("span", { class: "v" }, el("span", { text: "\u00D7" }), hudNext)),
+            el("div", { class: "ahud" }, el("span", { class: "k", text: "Best banked" }),
+              el("span", { class: "v" }, el("span", { text: "\u00D7" }), hudBest))
+          ),
+          el("div", { class: "frogger-danger" },
+            el("div", { class: "fd-bar" }, dangerFill),
+            dangerLabel
+          ),
+          el("div", { class: "frogger-screen" }, canvas),
+          statusEl,
+          el("div", { class: "frogger-controls" }, crossBtn, bankBtn)
+        )
+      )
+    );
+
+    const ctx = canvas.getContext("2d");
+
+    /* ---------- state ---------- */
+    let cssW = 420, cssH = 336, dpr = 1, laneH = 60;
+    let seed = 1;
+    let lanes = [null];
+    let phase = "idle";        // idle | ready | run | done
+    let readyT = 0, fade = 1, doneT = 0;
+    let blockT = 0;            // seconds of safe pocket left in the lane we're standing in
+    let camY = 0;
+    let depth = 0;
+    let resolveRun = null;
+    let outcome = null;
+    let rafId = 0, lastT = 0, destroyed = false, sizeTick = 0;
+    let floaters = [];
+    let shake = 0;
+    let banner = null;         // { text, t, life, cls }
+    let attractT = 0;
+    let queued = null;         // "cross" | "bank" pressed mid-hop, applied on landing
+
+    const frog = { lane: 0, y: 0, from: 0, to: 1, t: 0, rest: 0, hop: 0, arc: 0, state: "rest", squash: 0, deadLane: 0 };
+
+    /* ---------- lanes ---------- */
+    function laneRng(i) {
+      return mulberry32(((seed ^ Math.imul(i, 0x9e3779b1)) >>> 0) || 1);
+    }
+    function ensureLane(i) {
+      for (let n = lanes.length; n <= i; n++) lanes.push(makeLane(n, laneRng(n)));
+      return lanes[i];
+    }
+    function buildWorld(newSeed) {
+      seed = newSeed >>> 0 || 1;
+      lanes = [null];
+      ensureLane(C.maxLanes);
+    }
+    function liveLanes() {
+      return Math.min(lanes.length - 1, frog.lane + 5);
+    }
+
+    /* ---------- fx ---------- */
+    function float(text, worldY, cls) {
+      floaters.push({ text, y: worldY, t: 0, life: 0.8, cls: cls || "" });
+    }
+    function showBanner(text, cls, life) {
+      banner = { text, cls: cls || "", t: 0, life: life || 1.6 };
+    }
+
+    /* ---------- hud ---------- */
+    function currentMult() { return multFor(depth); }
+    function refreshHud() {
+      const m = phase === "run" || phase === "done" ? currentMult() : C.startMult;
+      hudMult.textContent = m.toFixed(2);
+      hudLanes.textContent = String(depth);
+      hudNext.textContent = multFor(depth + 1).toFixed(2);
+      hudBest.textContent = (state.frogger.bestMult || C.startMult).toFixed(2);
+    }
+    function refreshDanger() {
+      if (phase !== "run") {
+        dangerFill.style.width = "0%";
+        dangerLabel.textContent = phase === "idle" ? "PRESS PLAY" : "ROAD CLEAR";
+        dangerFill.className = "";
+        return;
+      }
+      // While the pocket holds you are untouchable where you stand: the bar
+      // counts the pocket down. Once it lapses the frog's own lane is live
+      // again, and the bar counts whichever of (own lane, lane above) will
+      // reach the column first.
+      const next = ensureLane(frog.lane + 1);
+      if (frog.state === "rest" && blockT > 0) {
+        const total = Math.max(0.001, blockSecFor(Math.max(1, frog.lane)));
+        dangerFill.style.width = (clamp(blockT / total, 0, 1) * 100).toFixed(1) + "%";
+        dangerFill.className = "safe";
+        dangerLabel.textContent = "SAFE " + blockT.toFixed(1) + "s";
+        return;
+      }
+      const t = frog.state === "hop"
+        ? timeUntilHit(next, C.frogX, C.frogHalfW)
+        : Math.min(timeUntilHit(lanes[frog.lane], C.frogX, C.frogHalfW), timeUntilHit(next, C.frogX, C.frogHalfW));
+      const ref = Math.max(0.85, next ? next.cw : C.cwLo);
+      const f = clamp(t / ref, 0, 1);
+      dangerFill.style.width = (f * 100).toFixed(1) + "%";
+      dangerFill.className = t < 0.3 ? "hot" : t < 0.6 ? "warm" : "";
+      const lead = frog.state === "rest" ? "MOVE! CAR IN " : "CAR IN ";
+      dangerLabel.textContent = t <= 0.001 ? "BLOCKED!" : lead + t.toFixed(2) + "s";
+    }
+
+    /* ---------- round flow ---------- */
+    function resetFrog() {
+      frog.lane = 0; frog.y = 0; frog.from = 0; frog.to = 1; frog.t = 0;
+      frog.rest = 0; frog.hop = 0; frog.arc = 0; frog.state = "rest"; frog.squash = 0; frog.deadLane = 0;
+      depth = 0; camY = 0; floaters = []; banner = null; shake = 0; queued = null; blockT = 0;
+    }
+
+    function startRun() {
+      const margin = C.initLo + Math.random() * (C.initHi - C.initLo);
+      aimMargin(ensureLane(1), C.frogX, C.frogHalfW, margin + C.hopSec);
+      frog.lane = 0; frog.y = 0; frog.from = 0; frog.to = 1; frog.t = 0;
+      frog.state = "hop"; frog.hop = 0;
+      depth = 0; camY = 0; queued = null;
+      phase = "run";
+      crossBtn.disabled = false;
+      bankBtn.disabled = false;
+      sfx.ready();
+      statusEl.className = "frogger-status";
+      statusEl.textContent = "CROSS \u2014 the traffic is coming";
+    }
+
+    function onLanded() {
+      if (frog.lane > 0) {
+        depth = frog.lane;
+        blockT = blockSecFor(depth);
+        if (frog.lane > 1) float(multText(multFor(depth)), frog.y + 0.35, "good");
+        sfx.hop();
+        const prev = lanes[frog.lane - 1];
+        if (prev && frog.lane > 1 && timeUntilHit(prev, C.frogX, C.frogHalfW) < 0.4 && Math.random() < 0.5) {
+          sfx.horn();
+        }
+      }
+      refreshHud();
+    }
+
+    function doCross() {
+      const to = frog.lane + 1;
+      if (to >= C.maxLanes) return;
+      ensureLane(to + 2);
+      frog.from = frog.y; frog.to = to; frog.t = 0; frog.state = "hop"; frog.hop = 0;
+      sfx.blip();
+    }
+
+    function cross() {
+      if (phase === "ready") { if (readyT > 0.35) readyT = 0.35; return; }
+      if (phase !== "run") return;
+      if (frog.state === "rest" && frog.rest >= C.settleSec) { queued = null; doCross(); }
+      else if (frog.state === "hop") queued = "cross";
+    }
+
+    function doBank() {
+      sfx.bank();
+      float("BANKED " + multText(currentMult()), frog.y + 0.35, "good");
+      finish(currentMult(), "bank");
+    }
+
+    function bank() {
+      if (phase !== "run") return;
+      if (frog.state === "rest") { queued = null; doBank(); }
+      else if (frog.state === "hop") queued = "bank";
+    }
+
+    function finish(mult, kind) {
+      phase = "done";
+      doneT = 1.0;
+      outcome = { multiplier: mult };
+      crossBtn.disabled = true;
+      bankBtn.disabled = true;
+      refreshHud();
+      if (kind === "bank") {
+        const best = state.frogger;
+        const m = multFor(depth);
+        if (depth > (best.bestDepth || 0) || m > (best.bestMult || 0)) {
+          best.bestDepth = Math.max(best.bestDepth || 0, depth);
+          best.bestMult = Math.max(best.bestMult || 0, m);
+          saveState();
+        }
+      }
+      const lanesWord = " lane" + (depth === 1 ? "" : "s");
+      if (kind === "splat") {
+        statusEl.className = "frogger-status lost";
+        statusEl.textContent = "SPLAT \u2014 flattened on lane " + (frog.deadLane || frog.lane) + " after " + depth + lanesWord;
+        showBanner("SPLAT!", "bad", 1.4);
+      } else {
+        statusEl.className = "frogger-status won";
+        statusEl.textContent = "BANKED " + multText(mult) + " \u2014 " + depth + lanesWord + " crossed";
+        showBanner("BANKED " + multText(mult), "good", 1.6);
+      }
+      const r = resolveRun;
+      resolveRun = null;
+      if (r) r(outcome);
+    }
+
+    function die(killerLane) {
+      frog.state = "splat";
+      frog.deadLane = killerLane;
+      frog.squash = 1;
+      shake = 0.45;
+      sfx.squish();
+      finish(0, "splat");
+    }
+
+    /* ---------- update ---------- */
+    function update(dt) {
+      attractT += dt;
+      ensureLane(frog.lane + 4);
+      const top = liveLanes();
+      // The road "blocks" under a resting frog: traffic in the lane it is
+      // standing in holds still, so an open gap you land in stays open while
+      // you decide (see `blockT`). Every other lane keeps moving -- including
+      // the one you are hopping out of and the one you are hopping into -- so
+      // a car that arrives while you are mid-hop still flattens you. Once the
+      // pocket lapses the lane starts flowing again and standing there is no
+      // longer free.
+      if (frog.state === "rest") blockT = Math.max(0, blockT - dt);
+      const held = frog.state === "rest" && blockT > 0 ? frog.lane : -1;
+      for (let i = 1; i <= top; i++) {
+        if (i === held) continue;
+        stepLane(lanes[i], dt);
+      }
+
+      if (frog.state === "hop") {
+        frog.t += dt;
+        const p = Math.min(1, frog.t / C.hopSec);
+        frog.hop = p;
+        frog.arc = Math.sin(Math.PI * p);
+        frog.y = frog.from + (frog.to - frog.from) * p;
+        if (p >= 1) {
+          frog.y = frog.to;
+          frog.lane = frog.to;
+          frog.state = "rest";
+          frog.rest = 0;
+          frog.arc = 0;
+          frog.hop = 0;
+          onLanded();
+          if (queued === "bank" && phase === "run") { queued = null; doBank(); }
+          if (phase !== "run") return;
+        }
+      } else if (frog.state === "rest") {
+        frog.rest += dt;
+        if (queued === "cross" && frog.rest >= C.settleSec) { queued = null; doCross(); }
+      }
+
+      camY += (frog.y - camY) * Math.min(1, dt * 9);
+      if (frog.state !== "splat") {
+        const touched = overlappedLanes(frog.y, C.frogHalfH, lanes.length - 1);
+        for (const i of touched) {
+          // The lane you're jumping out of can't touch you: the road holds it
+          // back (and the frog is airborne anyway, so the cars pass beneath).
+          // What kills you is the lane you're jumping INTO.
+          if (frog.state === "hop" && i === frog.lane) continue;
+          if (laneHit(lanes[i], C.frogX, C.frogHalfW)) { die(i); return; }
+        }
+      }
+    }
+
+    function updateFx(dt) {
+      for (const f of floaters) f.t += dt;
+      floaters = floaters.filter((f) => f.t < f.life);
+      if (shake > 0) shake = Math.max(0, shake - dt);
+      if (banner) { banner.t += dt; if (banner.t > banner.life) banner = null; }
+      camY += (frog.y - camY) * Math.min(1, dt * 9);
+    }
+
+    /* =========================================================
+       drawing
+       ========================================================= */
+    function roundRect(x, y, w, h, r) {
+      const rr = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    }
+
+    function drawCar(x0, x1, cy, hpx, lane, alpha) {
+      const wpx = x1 - x0;
+      const h = hpx * 0.76;
+      const y = cy - h / 2;
+      const dir = lane.dir;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      // ground shadow
+      ctx.fillStyle = "rgba(0,0,0,.38)";
+      ctx.beginPath();
+      ctx.ellipse((x0 + x1) / 2, cy + hpx * 0.34, wpx * 0.5, hpx * 0.12, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const rad = Math.min(h * 0.3, wpx * 0.2);
+      const g = ctx.createLinearGradient(0, y, 0, y + h);
+      g.addColorStop(0, lane.body);
+      g.addColorStop(0.55, lane.body);
+      g.addColorStop(1, lane.shade);
+      ctx.fillStyle = g;
+      roundRect(x0, y, wpx, h, rad);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,.45)";
+      ctx.lineWidth = Math.max(1, hpx * 0.02);
+      ctx.stroke();
+
+      const truck = lane.kind === "truck";
+      const front = dir > 0 ? x1 : x0;
+      const back = dir > 0 ? x0 : x1;
+
+      if (truck) {
+        // cab at the front, box behind
+        const cabW = Math.min(wpx * 0.34, wpx - h * 0.6);
+        const cabX = dir > 0 ? x1 - cabW : x0;
+        ctx.fillStyle = lane.shade;
+        roundRect(cabX, y - h * 0.06, cabW, h * 1.12, rad * 0.8);
+        ctx.fill();
+        ctx.fillStyle = "rgba(180,220,255,.5)";
+        const wsW = cabW * 0.5;
+        roundRect(dir > 0 ? cabX + cabW - wsW - cabW * 0.14 : cabX + cabW * 0.14, y - h * 0.02, wsW, h * 0.44, rad * 0.4);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(0,0,0,.25)";
+        ctx.lineWidth = Math.max(1, hpx * 0.015);
+        for (let i = 1; i <= 3; i++) {
+          const lx = (dir > 0 ? x0 + wpx * 0.06 : x0 + wpx * 0.94) + (dir > 0 ? 1 : -1) * i * wpx * 0.12;
+          ctx.beginPath();
+          ctx.moveTo(lx, y + h * 0.12);
+          ctx.lineTo(lx, y + h * 0.88);
+          ctx.stroke();
+        }
+      } else {
+        // windscreen + roof
+        ctx.fillStyle = "rgba(175,215,255,.55)";
+        const wsW = wpx * 0.26;
+        const wsX = dir > 0 ? x1 - wsW - wpx * 0.16 : x0 + wpx * 0.16;
+        roundRect(wsX, y + h * 0.1, wsW, h * 0.8, rad * 0.5);
+        ctx.fill();
+        ctx.fillStyle = "rgba(175,215,255,.35)";
+        const rwW = wpx * 0.2;
+        const rwX = dir > 0 ? x0 + wpx * 0.2 : x1 - rwW - wpx * 0.2;
+        roundRect(rwX, y + h * 0.14, rwW, h * 0.72, rad * 0.5);
+        ctx.fill();
+      }
+
+      // wheels
+      ctx.fillStyle = "#0b0d12";
+      const wr = h * 0.2;
+      for (const wx of [x0 + wpx * 0.2, x1 - wpx * 0.2]) {
+        roundRect(wx - wr, y + h - wr * 0.4, wr * 2, wr * 1.15, wr * 0.4);
+        ctx.fill();
+      }
+
+      // lights
+      const ly = cy;
+      ctx.fillStyle = "#fff4c2";
+      ctx.beginPath();
+      ctx.arc(front - dir * wpx * 0.06, y + h * 0.22, Math.max(1.4, h * 0.09), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(front - dir * wpx * 0.06, y + h * 0.78, Math.max(1.4, h * 0.09), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#ff5a4d";
+      ctx.fillRect(back - dir * wpx * 0.02 - (dir > 0 ? 0 : 2), y + h * 0.14, 3, Math.max(2, h * 0.16));
+      ctx.fillRect(back - dir * wpx * 0.02 - (dir > 0 ? 0 : 2), y + h * 0.7, 3, Math.max(2, h * 0.16));
+
+      // headlight glow on the tarmac
+      const gl = ctx.createLinearGradient(front, 0, front + dir * hpx * 1.5, 0);
+      gl.addColorStop(0, "rgba(255,244,194,.20)");
+      gl.addColorStop(1, "rgba(255,244,194,0)");
+      ctx.fillStyle = gl;
+      ctx.beginPath();
+      ctx.moveTo(front, y + h * 0.1);
+      ctx.lineTo(front + dir * hpx * 1.5, y + h * 0.55);
+      ctx.lineTo(front + dir * hpx * 1.5, y + h * 1.5);
+      ctx.lineTo(front, y + h * 0.95);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawChevron(cx, cy, dir, size, alpha) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = "rgba(255,255,255,.16)";
+      ctx.lineWidth = Math.max(1.2, size * 0.22);
+      ctx.lineCap = "round";
+      for (let k = -1; k <= 1; k++) {
+        const x = cx + dir * k * size * 0.9;
+        ctx.beginPath();
+        ctx.moveTo(x - dir * size * 0.3, cy - size * 0.42);
+        ctx.lineTo(x + dir * size * 0.3, cy);
+        ctx.lineTo(x - dir * size * 0.3, cy + size * 0.42);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawFrog(cx, cy, unit) {
+      const dead = frog.state === "splat";
+      const stretch = dead ? 0 : Math.sin(Math.PI * frog.hop);
+      const sx = 1 - 0.2 * stretch;
+      const sy = 1 + 0.28 * stretch;
+      const r = unit * 0.3;
+      ctx.save();
+      ctx.translate(cx, cy);
+      // shadow stays on the ground while the sprite rides the arc
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.beginPath();
+      ctx.ellipse(0, unit * 0.26 * (dead ? 0.4 : 1), r * (dead ? 1.5 : 1.05), r * 0.34, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.translate(0, -frog.arc * unit * HOP_LIFT);
+      ctx.scale(sx, dead ? 0.42 : sy);
+
+      const body = dead ? "#4b7a5c" : "#3ddc84";
+      const dark = dead ? "#22392a" : "#1c8a51";
+
+      // legs
+      ctx.fillStyle = dark;
+      const legY = r * 0.55;
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.ellipse(s * r * 0.72, legY, r * 0.3, r * 0.42, s * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // body
+      const g = ctx.createLinearGradient(0, -r, 0, r);
+      g.addColorStop(0, dead ? "#6ea881" : "#8af0b4");
+      g.addColorStop(0.5, body);
+      g.addColorStop(1, dark);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r * 1.02, r * 0.94, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(6,32,18,.7)";
+      ctx.lineWidth = Math.max(1, r * 0.14);
+      ctx.stroke();
+      // belly
+      ctx.fillStyle = "rgba(232,255,240,.8)";
+      ctx.beginPath();
+      ctx.ellipse(0, r * 0.22, r * 0.5, r * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // eyes
+      for (const s of [-1, 1]) {
+        const ex = s * r * 0.42, ey = -r * 0.62;
+        ctx.fillStyle = "#f4fff8";
+        ctx.beginPath();
+        ctx.arc(ex, ey, r * 0.34, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(6,32,18,.55)";
+        ctx.lineWidth = Math.max(1, r * 0.1);
+        ctx.stroke();
+        ctx.fillStyle = "#10201a";
+        if (dead) {
+          ctx.lineWidth = Math.max(1, r * 0.11);
+          ctx.strokeStyle = "#10201a";
+          for (const d of [-1, 1]) {
+            ctx.beginPath();
+            ctx.moveTo(ex - r * 0.16, ey - r * 0.16);
+            ctx.lineTo(ex + r * 0.16, ey + r * 0.16);
+            ctx.moveTo(ex + r * 0.16, ey - r * 0.16);
+            ctx.lineTo(ex - r * 0.16, ey + r * 0.16);
+            ctx.stroke();
+          }
+        } else {
+          ctx.beginPath();
+          ctx.arc(ex, ey + r * 0.03, r * 0.15, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    function draw() {
+      const w = cssW, h = cssH;
+      laneH = w / C.roadW;
+      const xOf = (x) => x * laneH;
+      const yOf = (wy) => h * FROG_SCREEN - (wy - camY) * laneH;
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      // tarmac
+      const bg = ctx.createLinearGradient(0, 0, 0, h);
+      bg.addColorStop(0, "#1a1f2b");
+      bg.addColorStop(1, "#0f131b");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+
+      const topWorld = camY + (h * FROG_SCREEN) / laneH;
+      const botWorld = camY + (h * FROG_SCREEN - h) / laneH;
+      const iLo = Math.max(1, Math.floor(botWorld - 0.5));
+      const iHi = Math.min(C.maxLanes, Math.ceil(topWorld + 0.5));
+
+      // lane surface + direction chevrons
+      for (let i = iLo; i <= iHi; i++) {
+        const lane = ensureLane(i);
+        const y0 = yOf(i - 0.5), y1 = yOf(i + 0.5);
+        ctx.fillStyle = i % 2 ? "rgba(255,255,255,.022)" : "rgba(0,0,0,.10)";
+        ctx.fillRect(0, Math.min(y0, y1), w, Math.abs(y1 - y0));
+        const step = lane.chevStep;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, Math.min(y0, y1), w, Math.abs(y1 - y0));
+        ctx.clip();
+        for (let x = ((lane.phase % step) + step) % step - step; x < C.roadW + step; x += step) {
+          drawChevron(xOf(x), (y0 + y1) / 2, lane.dir, laneH * 0.16, 1);
+        }
+        ctx.restore();
+      }
+
+      // lane dividers
+      ctx.strokeStyle = "rgba(236,242,255,.20)";
+      ctx.lineWidth = Math.max(1.4, laneH * 0.03);
+      ctx.setLineDash([laneH * 0.34, laneH * 0.26]);
+      for (let i = iLo; i <= iHi + 1; i++) {
+        const y = yOf(i - 0.5);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // the verge the frog starts on
+      const kerbY = yOf(0.5);
+      if (kerbY < h) {
+        const gg = ctx.createLinearGradient(0, kerbY, 0, h);
+        gg.addColorStop(0, "#1c4a2a");
+        gg.addColorStop(1, "#0d2415");
+        ctx.fillStyle = gg;
+        ctx.fillRect(0, kerbY, w, h - kerbY);
+        ctx.fillStyle = "#8b9a86";
+        ctx.fillRect(0, kerbY - Math.max(2, laneH * 0.05), w, Math.max(2, laneH * 0.05));
+      }
+
+      // the pocket the road clears under a resting frog
+      if (phase === "run" && frog.state === "rest" && frog.lane >= 1 && blockT > 0) {
+        const py0 = yOf(frog.lane - 0.5), py1 = yOf(frog.lane + 0.5);
+        const py = Math.min(py0, py1), ph = Math.abs(py1 - py0);
+        const pg = ctx.createLinearGradient(0, py, 0, py + ph);
+        pg.addColorStop(0, "rgba(93,243,154,.16)");
+        pg.addColorStop(0.5, "rgba(93,243,154,.05)");
+        pg.addColorStop(1, "rgba(93,243,154,.16)");
+        ctx.fillStyle = pg;
+        ctx.fillRect(0, py, w, ph);
+        ctx.strokeStyle = "rgba(93,243,154,.55)";
+        ctx.lineWidth = Math.max(1.3, laneH * 0.026);
+        ctx.beginPath();
+        ctx.moveTo(0, py + 0.5);
+        ctx.lineTo(w, py + 0.5);
+        ctx.moveTo(0, py + ph - 0.5);
+        ctx.lineTo(w, py + ph - 0.5);
+        ctx.stroke();
+      }
+
+      // traffic
+      for (let i = iLo; i <= iHi; i++) {
+        const lane = lanes[i];
+        if (!lane) continue;
+        const cy = yOf(i);
+        const half = laneH * 0.36;
+        for (const car of laneCars(lane, C.roadW, 1.5)) {
+          const x0 = xOf(car.x), x1 = xOf(car.x + car.w);
+          if (x1 < -laneH || x0 > w + laneH) continue;
+          drawCar(x0, x1, cy, half * 2, car, fade);
+        }
+      }
+
+      // the frog's column: sight line + destination window
+      const fx = xOf(C.frogX);
+      const colW = Math.max(6, C.frogHalfW * 2 * laneH);
+      if (phase === "run" && frog.state !== "splat" && depth < C.maxLanes - 1) {
+        const next = ensureLane(frog.lane + 1);
+        const open = clearFor(next, C.frogX, C.frogHalfW, C.hopSec);
+        const flag = open ? "1" : "0";
+        if (canvas.dataset.laneOpen !== flag) canvas.dataset.laneOpen = flag;
+        const ny0 = yOf(frog.lane + 0.5), ny1 = yOf(frog.lane + 1.5);
+        const pulse = 0.5 + 0.5 * Math.sin(attractT * 7);
+        ctx.fillStyle = open
+          ? "rgba(93,243,154," + (0.10 + 0.10 * pulse) + ")"
+          : "rgba(255,90,77," + (0.13 + 0.10 * pulse) + ")";
+        ctx.fillRect(fx - colW, Math.min(ny0, ny1), colW * 2, Math.abs(ny1 - ny0));
+        ctx.strokeStyle = open ? "rgba(93,243,154,.75)" : "rgba(255,90,77,.8)";
+        ctx.lineWidth = Math.max(1.4, laneH * 0.028);
+        ctx.strokeRect(fx - colW, Math.min(ny0, ny1), colW * 2, Math.abs(ny1 - ny0));
+      } else if (canvas.dataset.laneOpen !== "0") {
+        canvas.dataset.laneOpen = "0";
+      }
+      // faint sight line up the column
+      const lg = ctx.createLinearGradient(0, yOf(frog.lane + 0.5), 0, yOf(frog.lane + 4));
+      lg.addColorStop(0, "rgba(190,230,255,.16)");
+      lg.addColorStop(1, "rgba(190,230,255,0)");
+      ctx.fillStyle = lg;
+      ctx.fillRect(fx - colW * 0.35, yOf(frog.lane + 4.5), colW * 0.7, Math.abs(yOf(frog.lane + 4.5) - yOf(frog.lane + 0.5)));
+
+      // frog
+      const groundY = yOf(frog.y);
+      if (phase === "ready" || phase === "idle" || phase === "run" || phase === "done") {
+        drawFrog(fx, groundY, laneH);
+      }
+      if (frog.state === "splat") {
+        ctx.save();
+        ctx.strokeStyle = "rgba(180,30,40,.85)";
+        ctx.lineWidth = Math.max(1.5, laneH * 0.03);
+        for (let k = 0; k < 7; k++) {
+          const a = (k / 7) * Math.PI * 2 + 0.4;
+          ctx.beginPath();
+          ctx.moveTo(fx + Math.cos(a) * laneH * 0.3, groundY + Math.sin(a) * laneH * 0.18);
+          ctx.lineTo(fx + Math.cos(a) * laneH * 0.62, groundY + Math.sin(a) * laneH * 0.36);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // danger ring. Resting = a closed green ring ("nothing can reach you
+      // here"); hopping = a countdown ring fed by whichever lane can still
+      // hit the frog while it's over the paint.
+      if (phase === "run" && frog.state === "rest") {
+        const t = blockT > 0
+          ? blockT
+          : timeUntilHit(lanes[frog.lane], C.frogX, C.frogHalfW);
+        const ref = blockT > 0
+          ? Math.max(0.001, blockSecFor(Math.max(1, frog.lane)))
+          : Math.max(0.85, lanes[frog.lane] ? lanes[frog.lane].cw : C.cwLo);
+        const f = blockT > 0 ? 1 : clamp(t / ref, 0, 1);
+        ctx.save();
+        ctx.lineWidth = Math.max(2.5, laneH * 0.07);
+        ctx.lineCap = "round";
+        ctx.strokeStyle = blockT > 0
+          ? "rgba(93,243,180,.8)"
+          : t < 0.3 ? "rgba(255,74,60,.95)" : "rgba(255,193,78,.9)";
+        ctx.beginPath();
+        ctx.arc(fx, groundY, laneH * 0.62, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
+        ctx.stroke();
+        ctx.restore();
+      } else if (phase === "run" && frog.state === "hop") {
+        const nxt = ensureLane(frog.lane + 1);
+        const t = timeUntilHit(nxt, C.frogX, C.frogHalfW);
+        const ref = Math.max(0.85, nxt ? nxt.cw : C.cwLo);
+        const f = clamp(t / ref, 0, 1);
+        ctx.save();
+        ctx.lineWidth = Math.max(2.5, laneH * 0.07);
+        ctx.lineCap = "round";
+        ctx.strokeStyle = t < 0.08 ? "rgba(255,74,60,.95)" : t < 0.3 ? "rgba(255,193,78,.9)" : "rgba(120,230,180,.75)";
+        ctx.beginPath();
+        ctx.arc(fx, groundY, laneH * 0.62, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // floaters
+      for (const f of floaters) {
+        const p = f.t / f.life;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, 1 - p * p);
+        ctx.font = "700 " + Math.round(laneH * 0.42) + "px 'Bebas Neue', Impact, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = f.cls === "bad" ? "#ff8f99" : "#7dffb4";
+        ctx.shadowColor = "rgba(0,0,0,.85)";
+        ctx.shadowBlur = 8;
+        ctx.fillText(f.text, fx, yOf(f.y) - p * laneH * 0.9);
+        ctx.restore();
+      }
+
+      // banners
+      if (banner) {
+        const p = banner.t / banner.life;
+        ctx.save();
+        ctx.globalAlpha = clamp((1 - p) * 2.2, 0, 1);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "700 " + Math.round(laneH * 0.85) + "px 'Bebas Neue', Impact, sans-serif";
+        ctx.fillStyle = banner.cls === "bad" ? "#ff6a72" : "#ffe08a";
+        ctx.shadowColor = "rgba(0,0,0,.9)";
+        ctx.shadowBlur = 14;
+        ctx.fillText(banner.text, w / 2, h * 0.4);
+        ctx.restore();
+      }
+
+      if (phase === "ready") {
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const blink = 0.55 + 0.45 * Math.sin(attractT * 6);
+        ctx.globalAlpha = blink;
+        ctx.font = "700 " + Math.round(laneH * 0.72) + "px 'Bebas Neue', Impact, sans-serif";
+        ctx.fillStyle = "#ffe08a";
+        ctx.shadowColor = "rgba(0,0,0,.9)";
+        ctx.shadowBlur = 14;
+        ctx.fillText("GET READY", w / 2, h * 0.4);
+        ctx.globalAlpha = 0.85;
+        ctx.font = "600 " + Math.round(laneH * 0.34) + "px 'Bebas Neue', Impact, sans-serif";
+        ctx.fillStyle = "#cdd8ee";
+        ctx.fillText("the road clears in " + Math.max(0, readyT).toFixed(1) + "s", w / 2, h * 0.4 + laneH * 0.72);
+        ctx.restore();
+      }
+
+      if (phase === "idle") {
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const blink = 0.5 + 0.5 * Math.sin(attractT * 4);
+        ctx.globalAlpha = blink;
+        ctx.font = "700 " + Math.round(laneH * 0.62) + "px 'Bebas Neue', Impact, sans-serif";
+        ctx.fillStyle = "#ffe08a";
+        ctx.shadowColor = "rgba(0,0,0,.9)";
+        ctx.shadowBlur = 14;
+        ctx.fillText("CROSS THE ROAD TO PLAY", w / 2, h * 0.36);
+        ctx.restore();
+      }
+
+      // hit vignette
+      if (shake > 0) {
+        ctx.save();
+        ctx.globalAlpha = clamp(shake / 0.45, 0, 1) * 0.5;
+        const vg = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.25, w / 2, h / 2, Math.max(w, h) * 0.7);
+        vg.addColorStop(0, "rgba(255,0,0,0)");
+        vg.addColorStop(1, "rgba(255,0,0,.95)");
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, w, h);
+        ctx.restore();
+      }
+    }
+
+    /* ---------- loop ---------- */
+    function paused() {
+      if (!document.body.contains(canvas)) return true;
+      const layer = document.getElementById("modalLayer");
+      if (layer && !layer.hidden) return true;
+      return false;
+    }
+
+    function loop(t) {
+      if (destroyed) return;
+      const dt = clamp((t - lastT) / 1000 || 0, 0, 0.05);
+      lastT = t;
+      if ((sizeTick++ % 10) === 0) resize();
+      if (!paused()) {
+        if (phase === "idle") {
+          attractT += dt;
+          for (let i = 1; i <= C.maxLanes; i++) stepLane(lanes[i], dt);
+          updateFx(dt);
+        } else if (phase === "ready") {
+          attractT += dt;
+          readyT -= dt;
+          if (readyT <= 0) startRun();
+        } else if (phase === "run") {
+          if (fade < 1) fade = Math.min(1, fade + dt / FADE_SEC);
+          update(dt);
+          refreshDanger();
+        } else if (phase === "done") {
+          updateFx(dt);
+          if (doneT > 0) doneT -= dt;
+        }
+      }
+      draw();
+      if (phase === "done" && doneT <= 0) { rafId = 0; return; }
+      rafId = requestAnimationFrame(loop);
+    }
+
+    /* ---------- sizing ---------- */
+    let lastW = 0, lastH = 0;
+    function resize() {
+      const box = canvas.parentElement;
+      const cw = Math.max(220, Math.min((box.clientWidth || 420) - 18, 560));
+      const ch = Math.round(cw * (VIEW_LANES / C.roadW));
+      if (cw === lastW && ch === lastH) return;
+      lastW = cw; lastH = ch;
+      cssW = cw; cssH = ch;
+      canvas.style.width = cw + "px";
+      canvas.style.height = ch + "px";
+      dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(ch * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      laneH = cw / C.roadW;
+      draw();
+    }
+    let roRaf = 0;
+    function scheduleResize() {
+      if (roRaf) return;
+      roRaf = requestAnimationFrame(() => { roRaf = 0; if (!destroyed) resize(); });
+    }
+    let ro = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(scheduleResize);
+      ro.observe(canvas.parentElement);
+    }
+    window.addEventListener("resize", scheduleResize);
+
+    /* ---------- input ---------- */
+    function onKey(e) {
+      const tag = e.target && e.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const k = e.key;
+      const isCross = k === "ArrowUp" || k === "w" || k === "W" || k === " ";
+      const isBank = k === "ArrowDown" || k === "s" || k === "S" || k === "Enter";
+      if (!isCross && !isBank) return;
+      if (phase !== "run" && phase !== "ready") return;
+      e.preventDefault();
+      if (e.repeat) return;
+      if (isCross) cross(); else bank();
+    }
+    window.addEventListener("keydown", onKey);
+
+    function tap(fn) {
+      return (e) => { e.preventDefault(); fn(); };
+    }
+    crossBtn.addEventListener("pointerdown", tap(() => { cross(); }));
+    bankBtn.addEventListener("pointerdown", tap(() => { bank(); }));
+    canvas.addEventListener("pointerdown", tap(() => { if (phase === "run" || phase === "ready") cross(); }));
+
+    /* ---------- lifecycle ---------- */
+    async function play(stake, opts) {
+      if (opts && opts.instant) return { multiplier: 1 };
+      destroyed = false;
+      outcome = null;
+      floaters = [];
+      banner = null;
+      shake = 0;
+      buildWorld((Math.random() * 0xffffffff) >>> 0);
+      resetFrog();
+      fade = 0;
+      phase = "ready";
+      readyT = READY_SEC;
+      statusEl.className = "frogger-status";
+      statusEl.textContent = "GET READY \u2014 STAY OFF THE ROAD";
+      crossBtn.disabled = false;
+      bankBtn.disabled = true;
+      refreshHud();
+      refreshDanger();
+      lastT = performance.now();
+      if (!rafId) rafId = requestAnimationFrame(loop);
+      const result = await new Promise((resolve) => { resolveRun = resolve; });
+      return { multiplier: result ? result.multiplier : 0 };
+    }
+
+    function destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (roRaf) { cancelAnimationFrame(roRaf); roRaf = 0; }
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", scheduleResize);
+      if (ro) ro.disconnect();
+      phase = "done";
+      crossBtn.disabled = true;
+      bankBtn.disabled = true;
+      const r = resolveRun;
+      resolveRun = null;
+      if (r) r({ multiplier: 1, cancelled: true });
+    }
+
+    function openInfoCard() {
+      const LANES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20];
+      const maxM = multFor(20);
+      const ladder = el("div", { class: "ic-ladder" },
+        ...LANES.map((d) => {
+          const m = multFor(d);
+          return el("div", { class: "rung" + (m >= 10 ? " hot" : "") },
+            el("span", { text: "LANE " + d }),
+            el("span", { class: "bar", style: { width: Math.max(3, (m / maxM) * 100) + "%" } }),
+            el("span", { class: "v", text: "\u00D7" + m.toFixed(2) })
+          );
+        })
+      );
+
+      const visual = el("div", { class: "ic-visual" },
+        el("div", { class: "ic-hint", text: "PAYOUT LADDER \u2014 BANK WHENEVER YOU LIKE" }),
+        el("div", { class: "ic-scroll", style: { width: "100%", display: "flex", justifyContent: "center" } }, ladder)
+      );
+
+      const kvRow = (k, v) => el("div", { class: "row" }, el("span", { text: k }), el("span", { class: "v", text: v }));
+      const kv = el("div", { class: "ic-kv" },
+        kvRow("Free step onto the road", "\u00D7" + C.startMult.toFixed(2)),
+        kvRow("Lane 1 safe pocket", blockSecFor(1).toFixed(2) + "s"),
+        kvRow("Lane 10 safe pocket", blockSecFor(10).toFixed(2) + "s"),
+        kvRow("Deepest safe pocket", C.blockMin.toFixed(2) + "s")
+      );
+
+      const top = el("div", { class: "ic-top" },
+        el("div", { class: "ic-map" }, visual),
+        el("div", { class: "ic-col" },
+          sec("How you play",
+            ul([
+              "You are stepped one lane onto the road for free, where you are exactly even at <b>\u00D7" + C.startMult.toFixed(2) + "</b>.",
+              "<b>CROSS</b> hops one lane further out \u2014 every lane you choose pays more than the last.",
+              "<b>BANK</b> takes the money and ends the run. It is always safe, and you can take it on any lane.",
+            ])
+          ),
+          sec("The ladder",
+            ul([
+              "The first two chosen lanes are gentle: <b>\u00D7" + multFor(2).toFixed(2) + "</b>, then <b>\u00D7" + multFor(3).toFixed(2) + "</b>.",
+              "After that the prize compounds, reaching <b>\u00D7" + multFor(10).toFixed(2) + "</b> by your tenth lane.",
+              "From there it adds a flat <b>\u00D71 a lane</b>, so lane 20 is exactly <b>\u00D7" + multFor(20).toFixed(2) + "</b> \u2014 and it keeps climbing.",
+            ])
+          ),
+          sec("Safe pockets",
+            ul([
+              "Land in a gap and the road <b>blocks that lane behind you</b> \u2014 traffic holds still for a moment.",
+              "That pocket is shorter the deeper you are, so standing still never stays free.",
+              "Nothing is decided by a dice roll: every car is on screen, and the bar above the road tells you if the next lane is open long enough.",
+            ])
+          ),
+          sec("Getting flattened",
+            ul([
+              "If a car reaches your column while you are hopping, the frog is flattened and the <b>whole stake is lost</b>.",
+              "Banking is the only guaranteed exit \u2014 the deeper you go, the more you are risking.",
+            ])
+          )
+        )
+      );
+
+      openInfo("Frogger Gamble \u2014 How to Win", el("div", { class: "ic" },
+        top,
+        sec("Your payout", kv,
+          note("Your <b>banked multiplier</b> is paid on your stake \u2014 a \u00D710 bank on a $10 bet returns $100. The HUD keeps your best bank so far."))
+      ));
+    }
+
+    // attract screen: build a world and let the traffic run behind the glass
+    buildWorld((Math.random() * 0xffffffff) >>> 0);
+    resetFrog();
+    fade = 1;
+    refreshHud();
+    resize();
+    refreshDanger();
+    lastT = performance.now();
+    if (!rafId) rafId = requestAnimationFrame(loop);
+
+    app.onBetChange = () => { refreshHud(); };
+
+    return { root, play, actionLabel: "CROSS THE ROAD", destroy };
+  },
+};
