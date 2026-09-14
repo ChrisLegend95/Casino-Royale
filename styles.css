@@ -87,6 +87,8 @@ body{
   font-size:24px;letter-spacing:1px;line-height:1;white-space:nowrap;
 }
 .tstat-value.money{color:var(--gold);text-shadow:0 0 16px rgba(242,193,78,.3)}
+.tstat-value.money.inf{color:#7df3c0;text-shadow:0 0 22px rgba(92,243,154,.8);animation:infPulse 1.8s ease-in-out infinite}
+@keyframes infPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.12);opacity:.82}}
 .tstat-value.luck{color:var(--green)}
 .tstat-value.small{font-size:18px;color:#c7d4ec}
 .tstat-value.bump{animation:bump .4s ease}
@@ -375,7 +377,9 @@ body{
 .pips{display:flex;gap:4px}
 .pip{width:100%;height:5px;border-radius:3px;background:#242f47}
 .pip.on{background:linear-gradient(90deg,#ffe08a,#d9a02a);box-shadow:0 0 8px rgba(242,193,78,.6)}
-.perk-buy{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto}
+.perk-buy{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin-top:auto}
+.perk-actions{display:flex;gap:6px}
+.perk-actions .btn{flex:1 1 0}
 .perk-cost{font-family:'Bebas Neue',Impact,sans-serif;font-size:21px;letter-spacing:.6px;color:var(--gold)}
 .perk-cost.cant{color:var(--red)}
 .shop-note{font-size:11px;color:var(--muted);margin:0 0 14px}
@@ -720,6 +724,14 @@ body{
   padding:9px 11px;font-family:'Bebas Neue',Impact,sans-serif;font-size:22px;letter-spacing:1px;
 }
 .crash-field input:focus{outline:none;border-color:var(--gold)}
+.crash-field input:disabled{opacity:.45}
+.crash-mode{display:flex;align-items:center;gap:6px}
+.autotoggle{
+  font-family:'Bebas Neue',Impact,sans-serif;font-size:15px;letter-spacing:1.2px;padding:9px 12px;border-radius:10px;
+  background:#0a101c;border:1px solid var(--line);color:#93a4c2;cursor:pointer;transition:.16s;white-space:nowrap;
+}
+.autotoggle.on{background:linear-gradient(180deg,#2a6f4d,#14432e);border-color:#2e9b68;color:#9df7c5}
+.autotoggle:hover{transform:translateY(-1px)}
 .cashbtn{
   font-family:'Bebas Neue',Impact,sans-serif;font-size:26px;letter-spacing:2px;padding:12px 26px;border-radius:13px;
   background:linear-gradient(180deg,#43e08a,#1a9e57);color:#04220f;border:1px solid #0d6b39;cursor:pointer;transition:.16s;
@@ -1167,6 +1179,20 @@ body{
 .cheat-reward.meta{font-size:12px;font-family:inherit;letter-spacing:1.4px;text-transform:uppercase;color:var(--gold)}
 .cheat-foot{font-size:11px;line-height:1.65;color:#8fa0bd;max-width:440px}
 .cheat-foot b{color:#ff9aa5}
+.cheat-tools{align-self:stretch;display:flex;flex-direction:column;gap:8px}
+.cheat-toolrow{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:#0b1120;border:1px solid var(--line);border-radius:9px;padding:9px 12px}
+.cheat-toolrow.column{flex-direction:column;align-items:stretch;gap:8px}
+.cheat-toolname{font-size:12px;color:#c9d5ec;text-align:left}
+.cheat-toolrow .btn{flex:0 0 auto;min-width:132px}
+.cheat-grant{display:flex;gap:6px;align-items:stretch}
+.cheat-amount{
+  flex:1 1 auto;min-width:0;background:#0a101c;border:1px solid var(--line);border-radius:9px;color:var(--gold);
+  padding:8px 11px;font-family:'Bebas Neue',Impact,sans-serif;font-size:19px;letter-spacing:1px;
+}
+.cheat-amount:focus{outline:none;border-color:var(--gold)}
+.cheat-presets{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-start}
+.cheat-presets .btn{flex:1 1 auto;min-width:56px}
 
 /* ============ RESPONSIVE ============ */
 @media (max-width:1080px){

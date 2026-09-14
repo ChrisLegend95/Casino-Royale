@@ -78,6 +78,9 @@ function newRun() {
     loan: { active: false, principal: 0, repay: 0, takenAt: 0, deadline: 0 },
     idle: { on: false, bet: CONFIG.idleDefaultBet },
     machine: "slots",
+    infMoney: false,
+    infMoneySaved: 0,
+    cheatWin: false,
   };
 }
 
@@ -114,6 +117,10 @@ export function loadState() {
     if (!state.stats.byGame || typeof state.stats.byGame !== "object") state.stats.byGame = {};
     if (!Number.isFinite(state.money)) state.money = CONFIG.startingMoney;
     state.money = Math.round(state.money);
+    state.infMoney = !!state.infMoney;
+    state.cheatWin = !!state.cheatWin;
+    if (!Number.isFinite(state.infMoneySaved) || state.infMoneySaved < 0) state.infMoneySaved = state.money;
+    if (state.infMoney) state.money = Math.round(state.infMoneySaved);
     if (!Number.isFinite(state.arcade.pot) || state.arcade.pot < 1) state.arcade.pot = 5;
     if (!Number.isFinite(state.level) || state.level < 1) state.level = 1;
     if (!Number.isFinite(state.xp) || state.xp < 0) state.xp = 0;
@@ -148,13 +155,17 @@ export function roundMoney(n) {
   return Math.round(v);
 }
 export function addMoney(n) {
+  if (state.infMoney) return state.money;
   const next = Math.round((Number(state.money) || 0) + (Number(n) || 0));
   state.money = next;
   if (state.money > state.stats.peak) state.stats.peak = state.money;
   emit("money", state.money);
   return state.money;
 }
-export function canAfford(n) { return state.money >= n - 1e-9; }
+export function canAfford(n) {
+  if (state.infMoney) return true;
+  return state.money >= n - 1e-9;
+}
 
 /* ---------- xp / levels ---------- */
 // Milestone tiers: XP needed per level is xpBase * L^xpExp, then multiplied by

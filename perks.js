@@ -96,7 +96,28 @@ export function computeEffects() {
     }
   }
   e.luck = Math.max(0, Math.min(0.75, e.luck));
+  if (state.cheatWin) e.luck = 0.75;
   return e;
+}
+
+/* cheat: slam every finite-cap perk to its max in one go. The endless
+   `Fortune` perk (max === Infinity) is deliberately left alone. */
+export function maxOutFinitePerks() {
+  let added = 0;
+  for (const id of PERK_ORDER) {
+    const p = PERKS[id];
+    if (!p || p.max === Infinity) continue;
+    const cur = stacksOf(id);
+    if (cur < p.max) {
+      state.perks[id] = p.max;
+      added += p.max - cur;
+    }
+  }
+  if (added > 0) {
+    saveState();
+    emit("perks");
+  }
+  return added;
 }
 
 export function buyPerk(id, count = 1) {

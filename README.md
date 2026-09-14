@@ -1,4 +1,4 @@
-#link [https://chrislegend95.github.io/Casino-Royale/]
+# link [https://chrislegend95.github.io/Casino-Royale/]
 
 # 🎰 Gamble Casino
 

@@ -3,7 +3,7 @@ import {
   grantXp, xpProgress, xpNeeded, recordPlay, takeLoan, repayLoan, failLoan,
   loanExpired, loanRemainingMs, loanPrincipal, loanRepay, on, emit, clearSave,
 } from "./state.js";
-import { PERKS, PERK_ORDER, perkCost, stacksOf, isMaxed, buyPerk, computeEffects, perkShopCount } from "./perks.js";
+import { PERKS, PERK_ORDER, perkCost, stacksOf, isMaxed, buyPerk, computeEffects, perkShopCount, maxOutFinitePerks } from "./perks.js";
 import {
   el, clear, fmt, fmtShort, mult, pct, toast, modal, confirmDialog, confetti,
   floatText, floatAtElement, animateNumber, flavor, clamp,
@@ -59,6 +59,7 @@ let endModalOpen = false;
    ========================================================= */
 const app = {
   effects: () => computeEffects(),
+  get cheat() { return !!state.cheatWin; },
   get money() { return state.money; },
   get bet() { return currentBet(); },
   canAfford,
@@ -102,12 +103,19 @@ function tableLimit() {
 
 function betCap() {
   const units = Math.max(1, betUnits());
-  return Math.floor(Math.min(state.money, tableLimit()) / units);
+  const lim = tableLimit();
+  if (state.infMoney) return Math.max(1, Math.floor((Number.isFinite(lim) ? lim : 1e9) / units));
+  return Math.floor(Math.min(state.money, lim) / units);
 }
 
 /* =========================================================
    perks / economics
    ========================================================= */
+/* plain-text balance for labels: the infinity glyph when the money cheat is on */
+function moneyLabel() {
+  return state.infMoney ? "\u221E" : fmt(state.money);
+}
+
 function applyPerks(stake, rawMult, eff) {
   const base = stake * rawMult;
   const profit = base - stake;
@@ -144,7 +152,7 @@ async function playRound(instant = false, opts = {}) {
   if (!betInput) return;
   const gameId = game.id;
   const min = game.minBet || 1;
-  if (state.money < min) {
+  if (!state.infMoney && state.money < min) {
     handleBankrupt();
     return;
   }
@@ -181,6 +189,9 @@ async function playRound(instant = false, opts = {}) {
   }
 
   const eff = computeEffects();
+  if (state.cheatWin && (Number(res.multiplier) || 0) < 1.02) {
+    res = Object.assign({}, res, { multiplier: 1.02 + Math.random() * 0.48, rescued: true });
+  }
   const { payout, profit } = applyPerks(roundStake, Number(res.multiplier) || 0, eff);
   if (payout > 0) addMoney(payout);
   recordPlay({ game: gameId, stake: roundStake, payout, multiplier: Number(res.multiplier) || 0 });
@@ -234,8 +245,10 @@ async function playRound(instant = false, opts = {}) {
 
   saveState();
   checkLoanGoal();
-  if (state.money <= 0.004 && !state.loan.active) handleBankrupt();
-  else if (state.money <= 0.004 && state.loan.active) failLoanFlow();
+  if (!state.infMoney) {
+    if (state.money <= 0.004 && !state.loan.active) handleBankrupt();
+    else if (state.money <= 0.004 && state.loan.active) failLoanFlow();
+  }
 }
 
 function setPlayEnabled(on) {
@@ -253,8 +266,17 @@ function refreshPlayEnabled() {
    topbar render
    ========================================================= */
 function renderTop() {
-  animateNumber(topbar.money, moneyShown, state.money, 380);
-  moneyShown = state.money;
+  if (state.infMoney) {
+    cancelAnimationFrame(topbar.money.__anim || 0);
+    topbar.money.__anim = 0;
+    topbar.money.textContent = "\u221E";
+    topbar.money.classList.add("inf");
+    moneyShown = state.money;
+  } else {
+    topbar.money.classList.remove("inf");
+    animateNumber(topbar.money, moneyShown, state.money, 380);
+    moneyShown = state.money;
+  }
   topbar.level.textContent = String(state.level);
   const prog = xpProgress();
   topbar.xpFill.style.width = (prog.pct * 100).toFixed(1) + "%";
@@ -304,7 +326,7 @@ function buildNav() {
     horse: "house edge 8%",
     crash: "house edge 3% \u00B7 no idle",
     arcade: "beat it \u00B7 take 35% \u00B7 no idle",
-    frogger: "timing \u00B7 \u00D71.25 a lane \u00B7 no idle",
+    frogger: "timing \u00B7 +0.05 a lane \u00B7 no idle",
     chest: "3 of 9 chests pay",
   };
   for (const g of GAMES) {
@@ -641,6 +663,7 @@ function tick() {
     checkLoanGoal();
     if (loanExpired()) {
       if (state.money >= state.loan.repay) { checkLoanGoal(); }
+      else if (state.infMoney) { repayLoan(); }
       else failLoanFlow();
     }
   }
@@ -648,6 +671,7 @@ function tick() {
 
 function handleBankrupt() {
   if (endModalOpen) return;
+  if (state.infMoney) return;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   state.idle.on = false;
   updateIdleUI();
@@ -1000,14 +1024,15 @@ function openPerkShop() {
 
   const body = el("div", {}, banner, el("p", { class: "shop-note", html:
     "Perks are permanent for the run and <b>stack</b> on every purchase. Most cap at 5 stacks. " +
-    "<b>Fortune</b> never caps \u2014 each stack adds +1% to every win and the price climbs each time."
+    "<b>Fortune</b> never caps \u2014 each stack adds +1% to every win and the price climbs each time. " +
+    "<b>MAX ALL PERKS</b> instantly maxes every capped perk, but leaves endless Fortune alone."
   }), grid);
 
   function renderBanner() {
     const eff = computeEffects();
     clear(banner);
     banner.appendChild(el("div", { class: "statline" },
-      el("div", { class: "item" }, el("b", { text: fmt(state.money) }), "balance"),
+      el("div", { class: "item" }, el("b", { text: moneyLabel() }), "balance"),
       el("div", { class: "item" }, el("b", { text: ((eff.winMult - 1) * 100).toFixed(0) + "%" }), "win bonus"),
       el("div", { class: "item" }, el("b", { text: (eff.rebate * 100).toFixed(0) + "%" }), "loss rebate"),
       el("div", { class: "item" }, el("b", { text: "+" + (eff.luck * 100).toFixed(1) + "%" }), "luck"),
@@ -1078,7 +1103,7 @@ function openPerkShop() {
 
       card.appendChild(el("div", { class: "perk-buy" },
         el("div", { class: "perk-cost" + (!afford && !maxed ? " cant" : ""), text: maxed ? "\u2014" : fmt(cost) }),
-        el("div", { style: { display: "flex", gap: "6px" } }, buyBtn, maxBtn)
+        el("div", { class: "perk-actions" }, buyBtn, maxBtn)
       ));
       grid.appendChild(card);
     }
@@ -1095,6 +1120,14 @@ function openPerkShop() {
     body,
     onClose: () => { offPerks(); offMoney(); },
     buttons: [
+      { label: "MAX ALL PERKS", cls: "green", keepOpen: true, onClick: () => {
+          const n = maxOutFinitePerks();
+          renderAll();
+          renderTop();
+          renderPayoutNote();
+          if (n > 0) { toast("Maxed every finite perk (+" + n + " stacks). Fortune stays endless.", "gold", 2800); confetti(55); }
+          else toast("All finite perks are already maxed.", "info", 1900);
+      } },
       { label: "NEW RUN (reset everything)", cls: "ghost", keepOpen: true, onClick: async (mm) => {
           const ok = await confirmDialog("Start a new run?", "This wipes your money, perks, level and stats back to the beginning.", "Reset", "red");
           if (ok) { mm.close(); doReset(); }
@@ -1120,6 +1153,7 @@ topbar.loanBtn.addEventListener("click", openLoanModal);
 topbar.historyBtn.addEventListener("click", openHistoryModal);
 topbar.bankruptBtn.addEventListener("click", () => {
   if (endModalOpen) return;
+  if (state.infMoney) { toast("\u221E money is on \u2014 you can't go broke.", "gold", 2400); return; }
   openRunReport({ broke: state.money < (game.minBet || 1) });
 });
 
@@ -1145,6 +1179,56 @@ installGlobalSounds();
 /* =========================================================
    cheat / code entry
    ========================================================= */
+/* infinite money: freeze the real balance, show the infinity glyph, and let
+   every purchase through. Turning it off restores the frozen balance. */
+function setInfMoney(on) {
+  on = !!on;
+  if (on === state.infMoney) return state.infMoney;
+  if (on) {
+    state.infMoneySaved = Math.round(state.money);
+    state.infMoney = true;
+    toast("\u221E MONEY ON \u2014 the house is paying for everything.", "gold", 2600);
+    confetti(45);
+  } else {
+    state.infMoney = false;
+    state.money = Math.round(Number.isFinite(state.infMoneySaved) ? state.infMoneySaved : state.money);
+    toast("\u221E MONEY OFF \u2014 back to " + fmt(state.money) + ".", "info", 2600);
+  }
+  saveState(true);
+  moneyShown = state.money;
+  renderTop();
+  renderStats();
+  if (betInput) setBet(currentBet());
+  return state.infMoney;
+}
+
+/* always-win cheat: boosts luck to the cap and rescues any losing round. */
+function setCheatWin(on) {
+  state.cheatWin = !!on;
+  saveState(true);
+  renderTop();
+  toast(state.cheatWin ? "ALWAYS WIN ON \u2014 you can't lose a round." : "ALWAYS WIN OFF.", state.cheatWin ? "gold" : "info", 2400);
+  return state.cheatWin;
+}
+
+function grantMoney(amount, opts = {}) {
+  let v = Math.floor(Number(amount) || 0);
+  if (!(v > 0)) { toast("Enter an amount to grant.", "lose", 1600); return 0; }
+  v = Math.min(v, 1e15);
+  addMoney(v);
+  if (state.infMoney) state.infMoneySaved = Math.round((Number(state.infMoneySaved) || 0) + v);
+  state.stats.cheats = (state.stats.cheats || 0) + 1;
+  state.stats.cheatWinnings = (state.stats.cheatWinnings || 0) + v;
+  saveState(true);
+  renderTop();
+  renderStats();
+  if (!opts.silent) {
+    toast("Granted " + fmt(v) + ".", "gold", 2200);
+    confetti(40);
+  }
+  return v;
+}
+
 const CHEAT_CODES = {
   winnerwinnerchikendinner: 1000,
   losergottoeat: 20000,
@@ -1222,6 +1306,50 @@ function openCheatAdmin() {
     el("span", { class: "cheat-reward meta", text: "this menu" })
   ));
 
+  const winBtn = el("button", { class: "btn sm ghost", type: "button", onclick: () => { setCheatWin(!state.cheatWin); sync(); } });
+  const infBtn = el("button", { class: "btn sm ghost", type: "button", onclick: () => { setInfMoney(!state.infMoney); sync(); } });
+  function sync() {
+    winBtn.textContent = "ALWAYS WIN: " + (state.cheatWin ? "ON" : "OFF");
+    winBtn.className = "btn sm " + (state.cheatWin ? "gold" : "ghost");
+    infBtn.textContent = "\u221E MONEY: " + (state.infMoney ? "ON" : "OFF");
+    infBtn.className = "btn sm " + (state.infMoney ? "gold" : "ghost");
+    maxPerksBtn.disabled = PERK_ORDER.every((id) => PERKS[id].max === Infinity || stacksOf(id) >= PERKS[id].max);
+    maxPerksBtn.className = "btn sm " + (maxPerksBtn.disabled ? "ghost" : "gold");
+  }
+
+  const customInput = el("input", { class: "cheat-amount", type: "number", min: "1", step: "1000", value: "10000", placeholder: "amount" });
+  customInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); grantMoney(customInput.value); } });
+  const presetRow = el("div", { class: "cheat-presets" },
+    ...[1000, 10000, 100000, 1000000, 1000000000].map((v) =>
+      el("button", { class: "btn ghost sm", type: "button", text: "+" + fmtShort(v), onclick: () => grantMoney(v) })
+    )
+  );
+
+  const maxPerksBtn = el("button", { class: "btn sm ghost", type: "button", text: "MAX ALL PERKS (excl. \u221E)", onclick: () => {
+    const n = maxOutFinitePerks();
+    renderTop();
+    renderStats();
+    sync();
+    if (n > 0) { toast("Maxed every finite perk (+" + n + " stacks). Fortune left endless.", "gold", 2600); confetti(55); }
+    else toast("All finite perks are already maxed.", "info", 1900);
+  }});
+
+  const tools = el("div", { class: "cheat-tools" },
+    el("div", { class: "cheat-heading", text: "CHEAT TOOLS" }),
+    el("div", { class: "cheat-toolrow" },
+      el("span", { class: "cheat-toolname", text: "Always win every round" }), winBtn),
+    el("div", { class: "cheat-toolrow" },
+      el("span", { class: "cheat-toolname", text: "Infinite money (\u221E)" }), infBtn),
+    el("div", { class: "cheat-toolrow column" },
+      el("span", { class: "cheat-toolname", text: "Grant yourself money" }),
+      el("div", { class: "cheat-grant" }, customInput,
+        el("button", { class: "btn gold sm", type: "button", text: "GIVE", onclick: () => grantMoney(customInput.value) }))),
+    presetRow,
+    el("div", { class: "cheat-toolrow" },
+      el("span", { class: "cheat-toolname", text: "Max out every perk" }), maxPerksBtn)
+  );
+  sync();
+
   const body = el("div", { class: "cheatadmin" },
     el("div", { class: "cheat-badge", text: tier.emoji }),
     el("div", { class: "cheat-kicker", text: "OFFICIAL CHEATER RANKING" }),
@@ -1237,6 +1365,7 @@ function openCheatAdmin() {
       el("span", {}, el("b", { text: String(cheats) }), " code" + (cheats === 1 ? "" : "s") + " used"),
       el("span", {}, el("b", { text: fmt(winnings) }), " cheated out of the house")
     ),
+    tools,
     el("div", { class: "cheat-heading", text: "FORTUNE CODES \u2014 type into the \u{1F511} window" }),
     el("div", { class: "cheat-list" }, rows),
     el("div", { class: "cheat-foot", html:
@@ -1277,12 +1406,17 @@ window.casino = {
   state, app, playRound, get game() { return game; },
   computeEffects, perkCost, buyPerk, takeLoan, repayLoan, resetRun, clearSave,
   mountGame, setIdle, renderTop, doReset,
+  setInfMoney, setCheatWin, grantMoney, maxOutFinitePerks,
   openHistoryModal, renderHistoryPanel,
   sfx, isSoundEnabled: isEnabled, setSoundEnabled, toggleSound,
 };
 
 if (loanExpired()) {
-  failLoanFlow();
+  if (state.infMoney && repayLoan()) {
+    toast("Loan cleared \u2014 \u221E money had it covered.", "gold", 3600);
+  } else {
+    failLoanFlow();
+  }
 } else if (state.loan.active) {
   if (CONFIG.loanMinutes * 60000 - loanRemainingMs() > 0) {
     toast("Loan still running \u2014 " + fmt(state.loan.repay) + " to repay.", "info", 3600);
