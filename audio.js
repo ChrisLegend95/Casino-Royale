@@ -124,7 +124,7 @@ function stopSiren() {
 }
 
 /* ---------- sound bank ---------- */
-export const sfx = {
+const bank = {
   click() {
     tone({ freq: 760, dur: 0.03, type: "square", vol: 0.11 });
     tone({ freq: 1140, dur: 0.025, type: "square", vol: 0.045, delay: 0.014 });
@@ -307,6 +307,22 @@ export const sfx = {
     tone({ freq: 62, dur: 0.5, type: "square", vol: 0.18, slide: 26, delay: 0.02 });
   },
 };
+
+const missingSfx = new Set();
+
+export const sfx = new Proxy(bank, {
+  get(target, prop) {
+    if (prop === "then") return undefined;
+    if (typeof prop !== "string") return target[prop];
+    const fn = target[prop];
+    if (fn !== undefined) return fn;
+    if (!missingSfx.has(prop)) {
+      missingSfx.add(prop);
+      console.warn("[audio] sfx." + prop + "() is not defined; ignoring.");
+    }
+    return () => {};
+  },
+});
 
 /* ---------- global button feedback ---------- */
 const BUTTON_SEL = "button, .btn, .segbtn, .hpick, .dbtn, .machine-btn, .ml-linebtn, .x-btn, .pill, .paychip";
