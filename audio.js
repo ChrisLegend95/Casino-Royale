@@ -148,6 +148,23 @@ export const sfx = {
     }
   },
 
+  /* coin cascade + register cha-ching; tier scales the payout size */
+  cash(tier = 1) {
+    if (!enabled) return;
+    const n = tier <= 1 ? 7 : tier === 2 ? 12 : tier === 3 ? 18 : 26;
+    for (let i = 0; i < n; i++) {
+      const f = 2100 + Math.random() * 2800;
+      const d = i * 0.042 + Math.random() * 0.028;
+      tone({ freq: f, dur: 0.11 + Math.random() * 0.09, type: "triangle", vol: 0.1 + Math.random() * 0.06, delay: d });
+      tone({ freq: f * 1.5, dur: 0.055, type: "sine", vol: 0.05, delay: d + 0.004 });
+    }
+    tone({ freq: 1047, dur: 0.1, type: "square", vol: 0.13, delay: 0.02 });
+    tone({ freq: 1568, dur: 0.14, type: "square", vol: 0.12, delay: 0.13 });
+    tone({ freq: 2093, dur: 0.32, type: "triangle", vol: 0.11, delay: 0.26 });
+    noise({ dur: 0.16, vol: 0.09, freq: 5400, type: "highpass", delay: 0.03 });
+    noise({ dur: 0.22, vol: 0.07, freq: 3400, type: "highpass", delay: 0.2 });
+  },
+
   reelStop(delay = 0) {
     noise({ dur: 0.05, vol: 0.15, freq: 420, q: 1, delay, type: "lowpass" });
     tone({ freq: 175, dur: 0.06, type: "triangle", vol: 0.13, delay });
@@ -281,6 +298,13 @@ export const sfx = {
   crowd(vol = 0.14) {
     noise({ dur: 1.1, vol, freq: 1000, q: 0.4, attack: 0.25, type: "bandpass" });
     noise({ dur: 0.9, vol: vol * 0.7, freq: 3000, q: 0.5, attack: 0.2, type: "highpass" });
+  },
+
+  boom() {
+    noise({ dur: 0.5, vol: 0.3, freq: 240, q: 0.5, type: "lowpass", attack: 0.005 });
+    noise({ dur: 0.16, vol: 0.2, freq: 2600, q: 0.6, type: "highpass" });
+    tone({ freq: 120, dur: 0.34, type: "sawtooth", vol: 0.26, slide: 34 });
+    tone({ freq: 62, dur: 0.5, type: "square", vol: 0.18, slide: 26, delay: 0.02 });
   },
 };
 

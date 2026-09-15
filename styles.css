@@ -716,6 +716,8 @@ body{
 }
 .crash-mult.crashed{color:#ff5f6d;text-shadow:0 0 50px rgba(255,95,109,.7);animation:shake .5s}
 .crash-mult.cashed{color:#5cf39a;text-shadow:0 0 50px rgba(92,243,154,.7)}
+.crash-mult.ghost{color:#f2c14e;text-shadow:0 0 46px rgba(242,193,78,.55);animation:ghostPulse 1.05s ease-in-out infinite}
+@keyframes ghostPulse{0%,100%{opacity:.7}50%{opacity:1}}
 .crash-bar{display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap}
 .crash-field{display:flex;flex-direction:column;gap:5px}
 .crash-field .label{font-size:9.5px;letter-spacing:1.8px;text-transform:uppercase;color:var(--muted)}
@@ -977,6 +979,25 @@ body{
 .ic-ladder .bar{height:13px;border-radius:4px;background:linear-gradient(90deg,rgba(242,193,78,.85),rgba(255,120,90,.85));min-width:3px}
 .ic-ladder .v{font-family:'Bebas Neue',Impact,sans-serif;font-size:14px;letter-spacing:.8px;color:var(--gold);text-align:right}
 .ic-ladder .rung.hot .v{color:#ff8f6b}
+.ic-ladder .rung.top{color:#eaf1ff}
+.ic-ladder .rung.top .v{color:#ffe08a;text-shadow:0 0 12px rgba(255,224,138,.5)}
+.ic-tiers{display:flex;flex-direction:column;gap:4px;width:100%}
+.ic-tier{
+  display:grid;grid-template-columns:30px minmax(0,1fr) 78px 62px;align-items:center;gap:8px;
+  padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.028);
+  border-left:3px solid var(--tc,var(--gold));
+  font-size:11px;color:#b7c4dc;
+}
+.ic-tier .tn{font-family:'Bebas Neue',Impact,sans-serif;font-size:14px;letter-spacing:1px;color:var(--tc,var(--gold))}
+.ic-tier .nm{display:flex;flex-direction:column;gap:0;min-width:0}
+.ic-tier .nm b{color:#eaf1ff;font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ic-tier .nm span{font-size:9.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ic-tier .wn,.ic-tier .ms{display:flex;flex-direction:column;align-items:flex-end;gap:0}
+.ic-tier .wn b{font-family:'Bebas Neue',Impact,sans-serif;font-size:13px;letter-spacing:.6px;color:#cdd8ee}
+.ic-tier .wn span{font-size:8.5px;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.ic-tier .ms b{font-family:'Bebas Neue',Impact,sans-serif;font-size:15px;letter-spacing:.8px;color:var(--gold)}
+.ic-tier .ms span{font-size:8.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.ic-tier:last-child{background:rgba(242,193,78,.09);border-color:#ffe08a}
 .ic-hint{font-size:10.5px;color:var(--muted);text-align:center;letter-spacing:.3px}
 .ic h3{color:var(--gold)}
 .ic-axis{fill:#6d7c99;font-size:9px;font-family:'Inter',sans-serif}
@@ -1011,6 +1032,9 @@ body{
 .ahud .k{font-size:8.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ahud .v{font-family:'Bebas Neue',Impact,sans-serif;font-size:19px;letter-spacing:.6px;color:#dce6fa;white-space:nowrap}
 .ahud .v.gold{color:var(--gold);text-shadow:0 0 14px rgba(242,193,78,.4)}
+.ahud .v.safe{color:#5cf3d0}
+.ahud .v.safe .pin{font-size:11px;margin-right:3px;vertical-align:1px;filter:drop-shadow(0 0 6px rgba(92,243,208,.7))}
+.ahud .v .of{font-family:'DM Sans',system-ui,sans-serif;font-style:normal;font-size:10.5px;letter-spacing:.4px;color:var(--muted);margin-left:3px}
 .arcade-screen{
   position:relative;display:flex;justify-content:center;padding:9px;border-radius:12px;
   background:linear-gradient(180deg,#101a2e,#070b14);border:1px solid #3a4867;
@@ -1038,7 +1062,34 @@ body{
 /* ============ FROGGER GAMBLE ============ */
 .frogger-wrap{flex:1 1 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:0}
 .frogger-cab{padding:12px 14px 14px;width:100%;max-width:620px}
-.frogger-hud{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-bottom:9px}
+.frogger-hud{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-bottom:8px}
+.frogger-tier{
+  margin-bottom:8px;padding:6px 9px 7px;border-radius:10px;
+  background:linear-gradient(180deg,#0d1424,#0a0f1c);border:1px solid var(--line);
+}
+.ft-head{display:flex;align-items:baseline;gap:8px;margin-bottom:6px;min-width:0}
+.ft-tier{
+  font-family:'Bebas Neue',Impact,sans-serif;font-size:12px;letter-spacing:1.4px;color:var(--muted);white-space:nowrap;
+}
+.ft-name{
+  font-family:'Bebas Neue',Impact,sans-serif;font-size:14px;letter-spacing:1.6px;
+  color:var(--tc,var(--gold));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;
+  text-shadow:0 0 12px rgba(255,255,255,.12);
+}
+.ft-island{
+  margin-left:auto;font-family:'Bebas Neue',Impact,sans-serif;font-size:12px;letter-spacing:1.4px;
+  color:#6f7f9c;white-space:nowrap;
+}
+.ft-island.here{color:#5cf3d0;text-shadow:0 0 12px rgba(92,243,208,.5)}
+.ft-track{display:flex;gap:3px;height:8px}
+.ft-bar{
+  flex:1 1 0;min-width:0;border-radius:99px;overflow:hidden;background:#141d31;
+  border:1px solid var(--line);position:relative;
+}
+.ft-bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#2f8a55,#5cf39a);transition:width .16s linear}
+.ft-bar.now{border-color:#3f5578;box-shadow:0 0 10px rgba(92,243,154,.22)}
+.ft-bar.done>i{background:linear-gradient(90deg,#3f8f6a,#7dffb4)}
+.ft-bar:last-child>i{background:linear-gradient(90deg,#d9a02a,#ffe08a)}
 .frogger-danger{display:flex;align-items:center;gap:9px;margin-bottom:10px}
 .frogger-danger .fd-bar{
   position:relative;flex:1 1 auto;height:9px;border-radius:99px;overflow:hidden;
@@ -1243,6 +1294,10 @@ body{
   .ic-exnote{max-width:none}
   .ic-ex{flex-direction:column;align-items:flex-start;gap:6px}
   .ic-top{gap:14px}
+  .ic-tier{grid-template-columns:26px minmax(0,1fr) 66px 56px;gap:6px;padding:4px 6px}
+  .ic-tier .nm b{font-size:10.5px}
+  .ic-tier .nm span{font-size:9px}
+  .ic-tier .wn b,.ic-tier .ms b{font-size:12px}
   .ttools{width:100%;justify-content:space-between;gap:8px}
   .toolbtn{padding:7px 10px;font-size:11px}
   .shopbtn{padding:7px 10px;font-size:11px}
@@ -1251,6 +1306,10 @@ body{
   .arcade-dpad{grid-template-columns:repeat(3,42px);grid-template-rows:repeat(3,38px);gap:5px}
   .ahud .v{font-size:17px}
   .frogger-hud{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .frogger-hud .ahud:first-child{grid-column:1 / -1}
+  .frogger-tier{padding:6px 8px 7px;margin-bottom:8px}
+  .ft-name{font-size:12.5px;letter-spacing:1.2px}
+  .ft-island{font-size:11px;letter-spacing:1.1px}
   .frogger-controls{gap:8px}
   .fbtn .lbl{font-size:17px;letter-spacing:1.4px}
   .fbtn .key{display:none}

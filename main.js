@@ -11,6 +11,7 @@ import {
 } from "./ui.js";
 import { GAMES, gameById } from "./games/index.js";
 import { sfx, installGlobalSounds, isEnabled, setEnabled as setSoundEnabled, toggle as toggleSound } from "./audio.js";
+import { installMusicGesture, isMusicEnabled, toggleMusic } from "./music.js";
 
 /* =========================================================
    boot
@@ -212,6 +213,7 @@ async function playRound(instant = false, opts = {}) {
       if (profit >= 750 || mult >= 12) tier = 3;
       if (profit >= 4000 || mult >= 40) tier = 4;
       sfx.win(tier);
+      sfx.cash(tier);
     } else if (payout === 0) {
       sfx.lose();
     }
@@ -1174,6 +1176,22 @@ soundBtn.addEventListener("click", () => {
   renderSoundBtn();
 });
 renderSoundBtn();
+
+/* music has its own toggle, separate from the game sound effects */
+const musicBtn = document.getElementById("musicBtn");
+function renderMusicBtn() {
+  const on = isMusicEnabled();
+  musicBtn.textContent = "\u{1F3B5}";
+  musicBtn.classList.toggle("muted", !on);
+  musicBtn.title = on ? "Music on" : "Music off";
+  musicBtn.setAttribute("aria-label", on ? "Mute music" : "Unmute music");
+}
+musicBtn.addEventListener("click", () => {
+  toggleMusic();
+  renderMusicBtn();
+});
+renderMusicBtn();
+installMusicGesture();
 installGlobalSounds();
 
 /* =========================================================
