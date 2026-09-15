@@ -2,21 +2,31 @@
    frogger-math.js — the traffic + collision model behind Frogger Gamble.
 
    No DOM in here, so the model can be calibrated and re-tuned headlessly
-   (Monte-Carlo over a bot player; see README.md for the measured numbers).
+   (Monte-Carlo over a bot player).
 
    Units: one lane is 1.0 tall, the road is FROG_CONST.roadW wide, the frog
    sits at a fixed FROG_CONST.frogX, and time is in seconds. The renderer
    only ever multiplies by `laneH`, which keeps the physics independent of
    canvas resolution.
 
+   THE ROAD IS 100 LANES LONG, in ten blocks of ten.
+
+     - Every tenth lane (10, 20, ... 90) is a SAFE ISLAND: a traffic-free
+       grass median where nothing can touch the frog and it can rest as long
+       as it likes. Lane 100 is the SUMMIT — also safe, and crossing into it
+       finishes the run.
+     - The other nine lanes of a block are a TIER, and each tier has its own
+       character (see TIERS below): a side street gives you 1.8s windows at
+       1.6 lanes/sec, the final stretch gives you 0.52s windows at 4.8. Each
+       tier *starts* harder than the one before it ended, so crossing an
+       island is always stepping up into nastier traffic.
+
    A lane is an endless, *irregular* stream of vehicles: it holds a handful
    of cars with randomly-sized widths and randomly-sized gaps, and that whole
    little convoy repeats spatially every `loopLen`. Because the gaps vary, the
    lane does not tick like a metronome -- some windows are wide, some are
    tight. What is guaranteed is the *minimum* window: `cw` is the least amount
-   of daylight the fox's column ever gets, and it is the difficulty dial.
-   Lane 1 gives you 1.70s of guaranteed daylight; lane 14, with fast long
-   traffic, gives 0.78s. Every gap in the lane is at least that long.
+   of daylight the frog's column ever gets, and it is the difficulty dial.
 
    The frog's own collision box is deliberately tiny (0.28 wide) so a lane
    reads as "wide open" whenever it genuinely is. Everything the player must
@@ -30,23 +40,80 @@ export const FROG_CONST = {
   frogHalfW: 0.14,    // horizontal collision half-width, lane units (forgiving vs sprite)
   frogHalfH: 0.32,    // vertical collision half-height, lane units
   startMult: 1.0,     // you begin safe on the verge, exactly even
-  perHop: 0.05,       // every lane you cross adds this much (a flat linear ladder)
+  perHop: 0.05,       // base gain for every lane crossed
+  perHopStep: 0.01,   // each 10-lane block widens the rungs by this much
   roadW: 7,           // visible road width, lane units
   frogX: 3.5,         // the frog's fixed column
-  maxLanes: 40,       // lanes generated up front
-  ramp: 13,           // difficulty ramps over this many lanes, then holds
-  // lane 1 -> lane 14 ramps
-  speedLo: 1.8, speedHi: 3.4, speedJ: 0.25,
-  cwLo: 1.7, cwHi: 0.78, cwJ: 0.04,   // guaranteed clear window, seconds
-  carWLo: 0.85, carWHi: 1.8, carWJ: 0.1,
-  carsLo: 2, carsHi: 5,               // vehicles per repeating convoy
-  gapVar: 1.0,                        // extra random gap, as a fraction of the minimum
-  // how long the road holds traffic back (a safe pocket) after each landing
-  blockHi: 1.8, blockDecay: 0.06, blockMin: 0.9,
+  maxLanes: 101,      // lanes 1..100 are crossable; 101 is the far kerb
+  summit: 100,        // crossing lane 100 completes the run
+  islandEvery: 10,    // lanes 10,20,...,100 are traffic-free safe islands
+  cwFloor: 0.85,      // HUD reference when a lane has no meaningful window
+  // how long the road holds traffic back (a safe pocket) after each landing.
+  // Every landing buys a genuine safe pocket; it shrinks as you get deeper,
+  // which is what keeps a patient player honest.
+  blockHi: 1.75, blockDecay: 0.0125, blockMin: 0.5,
   // the frog starts mid-road with this much daylight before the first car arrives
   initLo: 0.7, initHi: 1.4,
   scan: 14,
 };
+
+/* Ten blocks of ten lanes. Each entry gives the profile at the FIRST lane of
+   the block and at its LAST (interpolated across the nine real lanes; the
+   tenth is the island). A block always starts harder than the previous one
+   ended, so the milestone itself is the step.
+
+     speed   lanes/second        cw    guaranteed clear window (seconds)
+     cars    vehicles per convoy carW  vehicle width (lanes)
+     gapVar  extra gap, x minGap speedJ lane-to-lane speed spread
+*/
+export const TIERS = [
+  { n: 1,  name: "SIDE STREET",     accent: "#5cf39a",
+    speed: [1.55, 1.95], speedJ: 0.10, cw: [1.82, 1.64], cwJ: 0.05,
+    cars: [2, 2], carW: [0.85, 1.15], gapVar: [0.55, 0.72] },
+  { n: 2,  name: "DOWNTOWN",        accent: "#7dd3a0",
+    speed: [2.05, 2.45], speedJ: 0.14, cw: [1.58, 1.44], cwJ: 0.05,
+    cars: [2, 3], carW: [0.95, 1.35], gapVar: [0.70, 0.88] },
+  { n: 3,  name: "THE FREEWAY",     accent: "#8fc9ff",
+    speed: [2.55, 2.95], speedJ: 0.16, cw: [1.40, 1.28], cwJ: 0.045,
+    cars: [3, 4], carW: [1.20, 1.95], gapVar: [0.85, 1.02] },
+  { n: 4,  name: "RUSH HOUR",       accent: "#ffd23f",
+    speed: [3.05, 3.45], speedJ: 0.18, cw: [1.24, 1.14], cwJ: 0.045,
+    cars: [4, 5], carW: [0.95, 1.55], gapVar: [1.00, 1.18] },
+  { n: 5,  name: "THE EXPRESSWAY",  accent: "#ff9f43",
+    speed: [3.55, 3.95], speedJ: 0.20, cw: [1.10, 1.00], cwJ: 0.04,
+    cars: [4, 5], carW: [1.10, 1.95], gapVar: [1.10, 1.28] },
+  { n: 6,  name: "NIGHT CROSSING",  accent: "#8ea2ff",
+    speed: [3.85, 4.15], speedJ: 0.22, cw: [0.96, 0.88], cwJ: 0.04,
+    cars: [4, 6], carW: [1.00, 1.80], gapVar: [1.20, 1.38] },
+  { n: 7,  name: "THE INTERCHANGE", accent: "#c58bff",
+    speed: [3.95, 4.30], speedJ: 0.55, cw: [0.84, 0.78], cwJ: 0.035,
+    cars: [5, 6], carW: [1.10, 2.00], gapVar: [1.30, 1.50] },
+  { n: 8,  name: "STORM FRONT",     accent: "#63d7ff",
+    speed: [4.15, 4.45], speedJ: 0.30, cw: [0.74, 0.69], cwJ: 0.035,
+    cars: [5, 6], carW: [1.15, 2.10], gapVar: [1.42, 1.62] },
+  { n: 9,  name: "THE GAUNTLET",    accent: "#ff7a6b",
+    speed: [4.30, 4.60], speedJ: 0.34, cw: [0.66, 0.61], cwJ: 0.03,
+    cars: [5, 7], carW: [1.20, 2.20], gapVar: [1.52, 1.72] },
+  { n: 10, name: "FINAL STRETCH",   accent: "#ffe08a",
+    speed: [4.45, 4.85], speedJ: 0.38, cw: [0.58, 0.52], cwJ: 0.03,
+    cars: [6, 7], carW: [1.25, 2.30], gapVar: [1.60, 1.85] },
+];
+
+/* Weather per tier: a night wash over the whole road, and a rain overlay.
+   The back half of the road descends into a night storm, which is exactly
+   where the traffic is already at its worst. */
+const ATMO = [
+  { night: 0,    rain: 0 },
+  { night: 0,    rain: 0 },
+  { night: 0,    rain: 0 },
+  { night: 0,    rain: 0 },
+  { night: 0,    rain: 0 },
+  { night: 1.0,  rain: 0 },
+  { night: 0.55, rain: 0.35 },
+  { night: 0.35, rain: 1.0 },
+  { night: 0.80, rain: 0.55 },
+  { night: 1.0,  rain: 0.90 },
+];
 
 const PAINT = [
   ["#ff5d73", "#8c1f30"],
@@ -71,6 +138,66 @@ export function mulberry32(seed) {
 }
 
 const mod = (n, m) => ((n % m) + m) % m;
+const clamp01 = (n) => (n < 0 ? 0 : n > 1 ? 1 : n);
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/* ---------- road geography ---------------------------------------------- */
+
+export function tierOf(lane) {
+  const C = FROG_CONST;
+  const i = Math.max(1, Math.min(C.summit, Math.floor(Number(lane) || 1)));
+  return Math.min(TIERS.length - 1, Math.floor((i - 1) / C.islandEvery));
+}
+
+export function tierName(lane) { return TIERS[tierOf(lane)].name; }
+
+export function isSummit(lane) { return Math.floor(Number(lane) || 0) >= FROG_CONST.summit; }
+
+/* Every tenth lane is a rest stop: no traffic, no collisions, no clock. */
+export function isSafeLane(lane) {
+  const C = FROG_CONST;
+  const i = Math.floor(Number(lane));
+  if (!Number.isFinite(i) || i <= 0) return false;
+  return i <= C.summit && i % C.islandEvery === 0;
+}
+
+/* The next island at or after `lane` (the lane itself if you are standing on
+   one, so callers that want "the one ahead" pass lane+1). */
+export function nextIsland(lane) {
+  const C = FROG_CONST;
+  const l = Math.max(0, Math.min(C.summit, Math.floor(Number(lane) || 0)));
+  const n = Math.floor(l / C.islandEvery) * C.islandEvery;
+  return Math.min(C.summit, n <= l ? n + C.islandEvery : n);
+}
+
+export function atmosphereFor(lane) { return ATMO[tierOf(lane)] || ATMO[0]; }
+
+/* ---------- lane construction ------------------------------------------- */
+
+/* A safe island: no convoy, no clock, and a little scenery for the renderer
+   to draw (generated here so it is deterministic per world seed). */
+function makeIsland(index, r) {
+  const C = FROG_CONST;
+  const kinds = ["tree", "bush", "flower", "pond", "lamp", "tree", "bush", "flower"];
+  const decor = [];
+  const n = 3 + Math.floor(r() * 4);
+  const left = Math.max(0.3, C.frogX - 0.95);          // scenery goes either
+  const right = Math.min(C.roadW - 0.3, C.frogX + 0.95); // side of the frog's column
+  for (let k = 0; k < n; k++) {
+    const kind = kinds[Math.floor(r() * kinds.length) % kinds.length];
+    const x = r() < 0.5
+      ? 0.35 + r() * Math.max(0.1, left - 0.35)
+      : right + r() * Math.max(0.1, (C.roadW - 0.35) - right);
+    decor.push({ kind, x, s: 0.55 + r() * 0.7, seed: Math.floor(r() * 1000) });
+  }
+  return {
+    index, safe: true, summit: index >= C.summit,
+    dir: index % 2 === 1 ? 1 : -1,
+    speed: 0, cw: Infinity, minGap: 0, cars: [], loopLen: 1, gap: 0,
+    carW: 0, kind: "island", body: "#2f7a48", shade: "#173f26",
+    chevStep: 1, phase: 0, decor,
+  };
+}
 
 /* Build one lane: a small convoy of distinct vehicles with distinct gaps.
    The convoy repeats every `loopLen`; `phase` slides the whole thing along
@@ -81,30 +208,37 @@ const mod = (n, m) => ((n % m) + m) % m;
 export function makeLane(index, rng = Math.random) {
   const C = FROG_CONST;
   const r = rng;
-  const t = Math.min(1, Math.max(0, (index - 1) / C.ramp));
-  const speed = C.speedLo + t * (C.speedHi - C.speedLo) + (r() - 0.5) * C.speedJ;
-  const cw = Math.max(0.4, C.cwLo + t * (C.cwHi - C.cwLo) + (r() - 0.5) * C.cwJ);
+  if (isSafeLane(index)) return makeIsland(index, r);
+
+  const t = tierOf(index);
+  const prof = TIERS[t];
+  const w = clamp01((index - 1 - t * C.islandEvery) / (C.islandEvery - 1));
+
+  const speed = Math.max(0.6, lerp(prof.speed[0], prof.speed[1], w) + (r() - 0.5) * prof.speedJ);
+  const cw = Math.max(0.34, lerp(prof.cw[0], prof.cw[1], w) + (r() - 0.5) * prof.cwJ);
   // spatial gap that yields at least `cw` seconds of daylight at this speed
   const minGap = cw * speed;
-  const count = C.carsLo + Math.floor(r() * (C.carsHi - C.carsLo + 1));
+  const count = prof.cars[0] + Math.floor(r() * (prof.cars[1] - prof.cars[0] + 1));
+  const gv = lerp(prof.gapVar[0], prof.gapVar[1], w);
+  const carW = lerp(prof.carW[0], prof.carW[1], w);
 
   const cars = [];
   let x = 0;
   for (let i = 0; i < count; i++) {
-    const w = Math.max(0.5, C.carWLo + t * (C.carWHi - C.carWLo) + (r() - 0.5) * C.carWJ);
+    const cwi = Math.max(0.5, carW + (r() - 0.5) * 0.18);
     const p = PAINT[Math.floor(r() * PAINT.length) % PAINT.length];
     cars.push({
-      off: x, w,
-      kind: w < 1.05 ? "car" : w < 1.5 ? "wagon" : "truck",
+      off: x, w: cwi,
+      kind: cwi < 1.05 ? "car" : cwi < 1.5 ? "wagon" : "truck",
       body: p[0], shade: p[1],
     });
-    x += w + minGap + r() * C.gapVar * minGap;
+    x += cwi + minGap + r() * gv * minGap;
   }
 
   const lead = cars[0];
   const loopLen = x;
   return {
-    index,
+    index, safe: false,
     dir: index % 2 === 1 ? 1 : -1,
     speed, cw, minGap,
     cars, loopLen,
@@ -117,11 +251,13 @@ export function makeLane(index, rng = Math.random) {
 }
 
 export function stepLane(lane, dtSec) {
+  if (!lane || lane.safe) return;
   lane.phase = mod(lane.phase + lane.dir * lane.speed * dtSec, lane.loopLen);
 }
 
-// the same lane as it will be `tauSec` from now (used for lookahead / bot play)
+/* the same lane as it will be `tauSec` from now (used for lookahead / bot play) */
 export function laneAt(lane, tauSec) {
+  if (!lane || lane.safe) return lane;
   const phase = mod(lane.phase + lane.dir * lane.speed * tauSec, lane.loopLen);
   return {
     index: lane.index, dir: lane.dir, speed: lane.speed, carW: lane.carW,
@@ -136,6 +272,7 @@ export function laneAt(lane, tauSec) {
    car with its own size and paint. */
 export function laneCars(lane, roadW, pad = 2) {
   const out = [];
+  if (!lane || lane.safe) return out;
   const L = lane.loopLen;
   for (const c of lane.cars) {
     const x0 = c.off + lane.phase;
@@ -149,7 +286,7 @@ export function laneCars(lane, roadW, pad = 2) {
 }
 
 export function laneHit(lane, fx, halfW) {
-  if (!lane) return false;
+  if (!lane || lane.safe) return false;
   const L = lane.loopLen;
   for (const c of lane.cars) {
     const x0 = c.off + lane.phase;
@@ -169,6 +306,7 @@ export function laneHit(lane, fx, halfW) {
    car's next arrival exactly with a single modulo, no iteration. */
 export function timeUntilHit(lane, fx, halfW) {
   if (!lane) return Infinity;
+  if (lane.safe) return Infinity;
   const L = lane.loopLen;
   const v = lane.speed;
   const P = L / v;
@@ -196,6 +334,7 @@ export function clearFor(lane, fx, halfW, durSec) {
    allows). The convoy is rigid, so once the column is inside a gap, sliding
    the whole thing back and forth sweeps the remaining daylight. */
 export function aimMargin(lane, fx, halfW, margin) {
+  if (!lane || lane.safe) return lane;
   const L = lane.loopLen;
   const v = lane.speed;
   const nearEdge = fx - halfW;
@@ -245,24 +384,35 @@ export function overlappedLanes(y, halfH, maxLane) {
   return out;
 }
 
-/* depth = lanes crossed from the verge (0 = still standing on the verge).
-   The ladder is a straight line: you start exactly even, and every lane you
-   cross adds a flat `perHop`, so the rungs land on
+/* ---------- payouts ------------------------------------------------------ */
 
-     lanes  0     1     2     3     4   ...  10    15    20   ...  40
-     mult   x1.00 x1.05 x1.10 x1.15 x1.20 ... x1.50 x1.75 x2.00 ... x3.00
+/* How much one lane is worth. The rungs widen one notch per block, so the
+   ladder stays a straight line *inside* a tier (you always know what the next
+   hop pays) but each new tier climbs steeper than the last:
 
-   The twentieth lane is exactly x2.00 and it keeps climbing x0.05 a lane. */
+     lanes   1-10   11-20   21-30  ...  91-100
+     per lane +0.05  +0.06   +0.07  ... +0.14
+
+     lane   0     10     20     30     40     50     60     70     80     90    100
+     mult  x1.00 x1.50  x2.10  x2.80  x3.60  x4.50  x5.50  x6.60  x7.80  x9.10 x10.50
+*/
+export function perHopFor(lane) {
+  const C = FROG_CONST;
+  return C.perHop + tierOf(Math.max(1, lane)) * C.perHopStep;
+}
+
 export function multFor(depth) {
   const C = FROG_CONST;
-  const d = Math.max(0, depth);
-  return C.startMult + C.perHop * d;
+  const d = Math.max(0, Math.min(C.summit, Math.floor(Number(depth) || 0)));
+  let m = C.startMult;
+  for (let i = 1; i <= d; i++) m += perHopFor(i);
+  return m;
 }
 
 /* How long the road blocks traffic in the lane a frog has just landed in.
    Every landing buys a genuine safe pocket; it shrinks as you get deeper,
-   which is what keeps a patient player honest. Set FROG_CONST.blockHi huge
-   (or wire it to a root tunable) for a pocket that never lapses. */
+   from 1.75s on the first lane to 0.50s near the summit, which is what keeps
+   a patient player honest. Islands ignore this entirely -- they never lapse. */
 export function blockSecFor(depth) {
   const C = FROG_CONST;
   const d = Math.max(0, depth - 1);
