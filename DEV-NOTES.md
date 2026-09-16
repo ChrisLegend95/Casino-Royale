@@ -117,6 +117,27 @@ lines (the name spans the row, the five numbers sit below it in 5 columns, the `
 `+` signs are hidden). Keep that media block **after** the base `.hist-*` rules in `src/styles.css` or
 the cascade drops it.
 
+## Save generations (wiping every player at once)
+
+Saves live in the player's own browser (`localStorage["casino-royale.save.v1"]`, per origin), so a page
+reload always brings the run back — there is no server-side profile to clear. The one lever that reaches
+*every* player at once is the save generation: `saveVersion` in main.pjs (→ `CONFIG.saveVersion`). Every
+save is stamped with `v: CONFIG.saveVersion` in `newRun()`, and `loadState()` checks `data.v` **before it
+merges anything** — a mismatch (`!==`, so an older *or* newer build's save) deletes the stored save, sets
+`loadFlags.wipedSave`, and returns false so boot starts a fresh run. `main.js` turns that flag into a gold
+toast ("Updated! Your old save was reset…") so nobody is left wondering where their run went.
+
+So the recipe for a global reset is: bump `saveVersion` in main.pjs (Perchance) and the matching
+fallback literal in `CONFIG.saveVersion` in `src/state.js` (the GitHub Pages mirror, which has no
+`window.root` so every `cfg()` falls back to its default — see DEPLOY.md), then push. Everyone starts
+again at `startingMoney` on their next load, with no redeploy or server call. Keep the key name the same;
+the mismatch check is what does the work, and reusing the key means the stale blob is overwritten rather
+than piling up. Two caveats: it also wipes the **editor's own preview save** when it is next loaded (save
+the dev a copy of their test save first, or re-stamp its `v`), and it is deliberately blunt —
+`BYGAME_MIGRATION`/`migrateByGame()` is the mechanism for *keeping* old saves while reshaping them, while
+`saveVersion` is for throwing them away. Players can still reset only themselves with BANKRUPT → "START
+OVER", or `casino.clearSave(); location.reload()`.
+
 ## Admin console & password
 
 The 🔑 window in the bottom-right corner takes cheat codes (`CHEAT_CODES` in `src/main.js` — the

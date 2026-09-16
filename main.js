@@ -1,7 +1,7 @@
 import {
   CONFIG, state, loadState, saveState, resetRun, addMoney, canAfford, round2, roundMoney,
   grantXp, xpProgress, xpNeeded, recordPlay, takeLoan, repayLoan, failLoan,
-  loanExpired, loanRemainingMs, loanPrincipal, loanRepay, on, emit, clearSave,
+  loanExpired, loanRemainingMs, loanPrincipal, loanRepay, on, emit, clearSave, loadFlags,
 } from "./state.js";
 import { PERKS, PERK_ORDER, perkCost, stacksOf, isMaxed, buyPerk, computeEffects, perkShopCount, maxOutFinitePerks } from "./perks.js";
 import {
@@ -21,6 +21,12 @@ if (state.bet === undefined) state.bet = 10;
 if (!Number.isFinite(state.idle.bet) || state.idle.bet < 1) state.idle.bet = CONFIG.idleDefaultBet;
 if (!state.idle.bet) state.idle.bet = CONFIG.idleDefaultBet;
 if (hadSave) saveState(true);
+/* A save from an older save generation is dropped on load (see `saveVersion` in
+   main.pjs / state.js) -- say so, so the player isn't left wondering where their run
+   went. Deferred a moment so it lands after the first render, not underneath it. */
+if (loadFlags.wipedSave) {
+  setTimeout(() => toast("Updated! Your old save was reset \u2014 new run, " + fmt(CONFIG.startingMoney) + " to start.", "gold", 5600), 700);
+}
 
 const topbar = {
   money: document.getElementById("moneyEl"),

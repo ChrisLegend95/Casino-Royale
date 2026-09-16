@@ -47,6 +47,12 @@ export const CONFIG = {
   idleXpMult: cfg("idleXpMult", 3),
   froggerBlockSec: cfg("froggerBlockSec", 1.8),
 
+  // Save generation -- see the comment on `saveVersion` in main.pjs. A stored save
+  // is only accepted when its `v` equals this, so bumping the knob in main.pjs
+  // wipes every player's progress (GitHub Pages visitors included) on their next
+  // load. `loadFlags.wipedSave` records that it happened, so main.js can say so.
+  saveVersion: cfg("saveVersion", 2),
+
   // Rocket Crash ("crash"). The rocket eases off the pad and accelerates: in log space
   // the climb is crashStart * t + crashAccel * t^2 (see the comment block in main.pjs).
   // These set the pace only -- the crash point, and therefore the 3% edge, is drawn
@@ -120,7 +126,7 @@ const BYGAME_MIGRATION = 3;
 
 function newRun() {
   return {
-    v: 1,
+    v: CONFIG.saveVersion,
     money: CONFIG.startingMoney,
     level: 1,
     xp: 0,
@@ -175,12 +181,25 @@ export function saveState(immediate) {
   else saveTimer = setTimeout(write, 250);
 }
 
+/* How the last loadState() went. `wipedSave` means the save it found was written by
+   a different save generation (see CONFIG.saveVersion) and was thrown away -- the
+   boot code uses it to tell the player their run was reset by the update. */
+export const loadFlags = { wipedSave: false };
+
 export function loadState() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return false;
     const data = JSON.parse(raw);
     if (!data || typeof data !== "object") return false;
+    /* The save generation check comes FIRST, before anything is merged: a save from
+       another build is discarded instead of migrated, which is what makes bumping
+       `saveVersion` (main.pjs) a global reset for every player. */
+    if ((Number(data.v) || 0) !== CONFIG.saveVersion) {
+      loadFlags.wipedSave = true;
+      try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* storage blocked */ }
+      return false;
+    }
     const fresh = newRun();
     Object.assign(state, fresh, data);
     state.stats = Object.assign({}, fresh.stats, data.stats || {});
