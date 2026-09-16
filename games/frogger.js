@@ -1,4 +1,4 @@
-import { el } from "../ui.js";
+import { el, clear } from "../ui.js";
 import { stageShell, clamp } from "./common.js";
 import { infoBtn, openInfo, sec, ul, note } from "./infocard.js";
 import { state, saveState, CONFIG } from "../state.js";
@@ -52,6 +52,18 @@ const HOP_LIFT = 0.42;      // sprite lift at the top of a hop, in lane units
 function multText(m) {
   return "\u00D7" + m.toFixed(2);
 }
+
+/* one line under the splat, picked at random, because the road always gets the last word */
+const SPLAT_LINES = [
+  "The road is undefeated.",
+  "You saw it coming. Your thumb disagreed.",
+  "Two more lanes and you would have banked a fortune.",
+  "Green means go. It does not mean safe.",
+  "The gap was right there.",
+  "Somewhere, the house just added another wing.",
+  "The frog had plans. The truck had right of way.",
+  "You were one lane from the island.",
+];
 
 export default {
   id: "frogger",
@@ -124,6 +136,24 @@ export default {
       el("span", { class: "key", text: "\u2193 / enter" })
     );
 
+    /* the game-over card: splat the frog and this slides over the road with the
+       post-mortem and a one-tap rematch (the side panel's PLAY does the same) */
+    const deathEmoji = el("div", { class: "fd-emoji", text: "\u{1F4A5}" });
+    const deathTitle = el("div", { class: "fd-title", text: "SPLATTED" });
+    const deathSub = el("div", { class: "fd-sub", text: "" });
+    const deathGrid = el("div", { class: "fd-grid" });
+    const deathFlavor = el("div", { class: "fd-flavor", text: "" });
+    const deathAgain = el("button", {
+      class: "fd-again", type: "button",
+      onclick: () => { if (app && typeof app.playAgain === "function") app.playAgain(); },
+    },
+      el("span", { class: "lbl", text: "TRY AGAIN" }),
+      el("span", { class: "key", text: "same bet \u00B7 fresh road" })
+    );
+    const deathCard = el("div", { class: "frogger-death", hidden: true },
+      el("div", { class: "fd-panel" }, deathEmoji, deathTitle, deathSub, deathGrid, deathFlavor, deathAgain)
+    );
+
     const root = stageShell(
       "Frogger Gamble",
       "Cross the road one lane at a time. Every lane pays more than the last \u2014 the cars are right there, so it's your call when to go.",
@@ -156,7 +186,7 @@ export default {
             el("div", { class: "fd-bar" }, dangerFill),
             dangerLabel
           ),
-          el("div", { class: "frogger-screen" }, canvas),
+          el("div", { class: "frogger-screen" }, canvas, deathCard),
           statusEl,
           el("div", { class: "frogger-controls" }, crossBtn, bankBtn)
         )
@@ -185,6 +215,7 @@ export default {
     let atmo = { night: 0, rain: 0 };   // eased toward the current tier's weather
     let drawnCars = [];        // this frame's visible cars, for the headlight pass
     let queued = null;         // a "bank" pressed mid-hop, applied on landing (hops never buffer)
+    let lastStake = 1;         // the stake this run was bought with (for the game-over card)
 
     const frog = { lane: 0, y: 0, from: 0, to: 1, t: 0, rest: 0, hop: 0, arc: 0, state: "rest", squash: 0, deadLane: 0 };
 
@@ -315,6 +346,7 @@ export default {
       phase = "run";
       crossBtn.disabled = false;
       bankBtn.disabled = false;
+      hideDeathCard();
       sfx.ready();
       statusEl.className = "frogger-status";
       statusEl.textContent = "ON THE VERGE \u2014 " + TIERS[0].name + " \u00B7 first island at lane 10";
@@ -381,6 +413,38 @@ export default {
       else if (frog.state === "hop") queued = "bank";
     }
 
+    /* ---------- game over ---------- */
+    function deathCell(k, v, cls) {
+      return el("div", { class: "fd-cell" + (cls ? " " + cls : "") },
+        el("span", { class: "k", text: k }),
+        el("span", { class: "v", text: v })
+      );
+    }
+
+    function showDeathCard() {
+      const lane = frog.deadLane || Math.max(1, depth + 1);
+      deathSub.innerHTML = "FLATTENED ON LANE <b>" + lane + "</b> OF " + C.summit;
+      clear(deathGrid);
+      deathGrid.appendChild(deathCell("Lanes crossed", depth + " / " + C.summit));
+      deathGrid.appendChild(deathCell("Was holding", depth > 0 ? multText(multFor(depth)) : "\u00D7" + C.startMult.toFixed(2), "gold"));
+      deathGrid.appendChild(deathCell("Stake lost", app.fmt(lastStake), "bad"));
+      deathGrid.appendChild(deathCell("Best ever banked", multText(state.frogger.bestMult || C.startMult)));
+      deathFlavor.textContent = SPLAT_LINES[Math.floor(Math.random() * SPLAT_LINES.length)];
+      const broke = !state.infMoney && state.money < lastStake;
+      deathAgain.disabled = broke;
+      deathAgain.classList.toggle("broke", broke);
+      deathCard.hidden = false;
+      deathCard.classList.remove("in");
+      void deathCard.offsetWidth;
+      deathCard.classList.add("in");
+    }
+
+    function hideDeathCard() {
+      if (deathCard.hidden) return;
+      deathCard.hidden = true;
+      deathCard.classList.remove("in");
+    }
+
     function finish(mult, kind) {
       phase = "done";
       doneT = kind === "summit" ? 2.4 : 1.0;
@@ -402,6 +466,8 @@ export default {
         statusEl.className = "frogger-status lost";
         statusEl.textContent = "SPLAT \u2014 flattened on lane " + (frog.deadLane || frog.lane) + " after " + depth + lanesWord;
         showBanner("SPLAT!", "bad", 1.4);
+        showDeathCard();
+        setTimeout(() => { if (!destroyed) sfx.gameOver(); }, 240);
       } else if (kind === "summit") {
         statusEl.className = "frogger-status won";
         statusEl.textContent = "SUMMIT! ALL " + C.summit + " LANES \u2014 BANKED " + multText(mult);
@@ -412,6 +478,7 @@ export default {
         statusEl.textContent = "BANKED " + multText(mult) + " \u2014 " + depth + lanesWord + " crossed";
         showBanner("BANKED " + multText(mult), "good", 1.6);
       }
+      if (kind !== "splat") hideDeathCard();
       const r = resolveRun;
       resolveRun = null;
       if (r) r(outcome);
@@ -1249,6 +1316,8 @@ export default {
     async function play(stake, opts) {
       if (opts && opts.instant) return { multiplier: 1 };
       destroyed = false;
+      lastStake = Math.max(1, Math.floor(Number(stake) || 1));
+      hideDeathCard();
       outcome = null;
       floaters = [];
       banner = null;
