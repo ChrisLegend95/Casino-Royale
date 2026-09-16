@@ -794,6 +794,12 @@ body{
   padding:9px 11px;font-family:'Bebas Neue',Impact,sans-serif;font-size:17px;letter-spacing:1.4px;
 }
 .cheat-input:focus{outline:none;border-color:var(--gold)}
+.cheat-panel.asking{border-color:var(--gold-d);box-shadow:0 0 0 1px rgba(242,193,78,.22),var(--shadow)}
+.cheat-panel.denied{border-color:#e0555f;animation:shake .42s ease}
+.cheat-hint{
+  font-family:'Bebas Neue',Impact,sans-serif;font-size:12.5px;letter-spacing:2.2px;color:#ff9aa3;
+  text-align:left;padding:1px 3px 7px;max-width:210px;line-height:1.25;
+}
 @media (max-width:520px){
   .cheat-input{width:160px}
 }
@@ -1423,6 +1429,63 @@ body{
 .hist-summary b{font-family:'Bebas Neue',Impact,sans-serif;font-size:19px;letter-spacing:.6px;color:#dce6fa;margin-right:4px}
 .hist-summary .good b{color:#5cf39a}
 .hist-summary .bad b{color:#ff8f99}
+.hist-sub-head{font-size:9.5px;letter-spacing:1.7px;text-transform:uppercase;font-weight:800;color:var(--muted);margin:2px 0 7px}
+.hist-sub-head:not(:first-child){margin-top:14px}
+.hist-note{font-size:10.5px;line-height:1.5;color:var(--muted);margin:-4px 0 12px}
+
+/* ---- per-table breakdown: history modal ---- */
+.hist-gtable{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#0a0f1a;margin-bottom:10px}
+.hgt-head,.hgt-row{display:grid;grid-template-columns:minmax(0,1.55fr) .55fr .9fr .9fr 1fr .95fr;gap:6px;padding:7px 11px;align-items:center}
+.hgt-head{background:#141c2d;font-size:8.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--muted)}
+.hgt-head span:not(:first-child),.hgt-row span:not(:first-child){text-align:right}
+.hgt-row{font-size:12px;color:#cdd8ee;border-top:1px solid var(--line)}
+.hgt-row .hgt-name{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hgt-row .good{color:#5cf39a;font-weight:700}
+.hgt-row .bad{color:#ff8f99;font-weight:700}
+.hgt-row .hgt-mut{color:var(--muted)}
+.hgt-row .hgt-rate{cursor:help}
+.hgt-row .hgt-sign{display:inline}
+.hgt-row.hgt-idle{opacity:.45}
+.hgt-row.hgt-idle .hgt-name{font-weight:600}
+.hgt-total{background:#0c1220;border-top:1px solid #26324a}
+.hgt-total .hgt-name{font-size:10.5px;letter-spacing:1.4px;text-transform:uppercase;font-weight:800;color:var(--muted)}
+.hgt-split{display:flex;justify-content:space-between;gap:10px;padding:6px 11px;background:#0b1120;border-top:1px solid var(--line);font-size:8.5px;letter-spacing:1.6px;text-transform:uppercase;font-weight:800;color:var(--muted)}
+.hgt-split span:last-child{opacity:.75}
+
+/* ---- per-table breakdown: side panel ---- */
+.hist-mini-wrap{margin-bottom:8px}
+.hist-mini{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:#0a0f1a}
+.hmin-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:7px;align-items:center;padding:5px 9px;border-top:1px solid var(--line)}
+.hmin-row:first-child{border-top:none}
+.hmin-head{background:#141c2d}
+.hmin-head span{font-size:8px;letter-spacing:1.4px;text-transform:uppercase;font-weight:800;color:var(--muted)}
+.hmin-icon{font-size:13px;line-height:1}
+.hmin-name{font-size:10.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#dce6fa}
+.hmin-net{font-size:11px;font-weight:700;text-align:right;min-width:56px;color:var(--muted)}
+.hmin-net.good{color:#5cf39a}
+.hmin-net.bad{color:#ff8f99}
+.hmin-rate{font-size:9.5px;text-align:right;min-width:36px;color:var(--muted)}
+.hmin-more{padding:5px 9px;border-top:1px solid var(--line);text-align:right;background:#0b1120}
+.hmin-more .linkbtn{font-size:8.5px}
+
+/* narrow screens: the per-table sheet stacks the name above its five numbers, since
+   six money columns cannot be read side by side on a phone (these live after the
+   base rules on purpose — media queries earlier in the file would lose the cascade) */
+@media (max-width:640px){
+  .hgt-head,.hgt-row{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:6px 9px;font-size:11px}
+  .hgt-head span:first-child{display:none}
+  .hgt-head::before{content:"";grid-column:1 / -1;height:0}
+  .hgt-row .hgt-name{grid-column:1 / -1;margin-bottom:1px}
+  .hgt-row .hgt-sign{display:none}
+  .hist-full{max-height:none;overflow:visible}
+  .hist-summary{gap:12px;padding:8px 10px;font-size:11px}
+  .hist-summary b{font-size:17px}
+}
+@media (max-width:520px){
+  .hgt-head{font-size:7.5px;letter-spacing:1.1px}
+  .hgt-row{padding:5px 8px}
+  .hgt-row.hgt-total .hgt-name{font-size:9.5px}
+}
 
 /* ============ FROGGER: GAME OVER ============ */
 .frogger-death{
@@ -1537,7 +1600,7 @@ body{
 .membtn.cash:active:not(:disabled){transform:scale(.97);background:linear-gradient(180deg,#ffe08a,#d9a02a);color:#2c1d00}
 .membtn:disabled{opacity:.4;cursor:default}
 /* info-card bits */
-.ic-ladder.mem .rung{grid-template-columns:52px 1fr 106px}
+.ic-ladder.mem .rung{grid-template-columns:52px 1fr minmax(106px,max-content)}
 .mem-mini{display:flex;justify-content:center}
 .mem-pads{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
 .mem-padrow{display:flex;align-items:center;gap:5px;font-size:11px;color:#b7c4dc}
@@ -1569,7 +1632,13 @@ body{
 /* ============ RUSSIAN ROULETTE ============ */
 .rr-wrap{flex:1 1 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:0}
 .rr-cab{max-width:560px;width:100%}
-.rr-hud{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-bottom:8px}
+/* four cells now that the round counter sits beside the bank: Round / Bank / Cash
+   out / Best ever. The value font is a notch smaller so a seven-figure cash-out
+   still fits the narrower cells on a phone. */
+.rr-hud{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:8px}
+.rr-hud .ahud{padding:6px 6px}
+.rr-hud .ahud .k{letter-spacing:1px}
+.rr-hud .ahud .v{font-size:16px;letter-spacing:.4px}
 .ahud .v.warn{color:#f2c14e}
 .ahud .v.bad{color:#ff8f99}
 
@@ -1702,6 +1771,32 @@ body{
 
 /* info-card bits */
 .rr-mini-wrap .rr-svg{margin-bottom:2px}
+/* two still drums side by side: the round-1 load and the top-rung load, so the
+   ladder's "heavier every rung" is visible rather than only tabulated */
+.rr-minis{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.rr-mini-card{display:flex;flex-direction:column;align-items:center}
+.rr-minis .rr-svg{max-width:150px}
+.rr-minis .ic-cap{min-height:0;max-width:none;white-space:nowrap}
+
+/* the revolver's ladder: round | load bar | bank | live rounds | average return.
+   `RET` is the real number the game pays -- survival odds to that rung times its
+   multiplier -- so the card admits its own edge. `.best` marks the highest-return
+   rung (round 1 with the shipped table) and `.top` the last one. */
+.ic-ladder.rr{max-width:352px}
+.ic-ladder.rr .rung{grid-template-columns:22px 1fr 52px 46px 46px;gap:6px;font-size:10.5px;padding:1px 6px;border-radius:5px;border-left:2px solid transparent}
+.ic-ladder.rr .rung .n{font-family:'Bebas Neue',Impact,sans-serif;font-size:13px;letter-spacing:.5px;color:#8b98b4;text-align:right}
+.ic-ladder.rr .rung .lv{font-family:'Bebas Neue',Impact,sans-serif;font-size:12.5px;letter-spacing:.5px;color:#ff9d7a;text-align:right}
+.ic-ladder.rr .rung .rt{font-family:'Bebas Neue',Impact,sans-serif;font-size:12.5px;letter-spacing:.5px;color:#7fe3ff;text-align:right}
+.ic-ladder.rr .rung.best{background:rgba(92,243,154,.10);border-left-color:#5cf39a}
+.ic-ladder.rr .rung.best .n{color:#5cf39a}
+.ic-ladder.rr .rung.best .rt{color:#5cf39a;text-shadow:0 0 10px rgba(92,243,154,.4)}
+.ic-ladder.rr .rung.top{background:rgba(255,90,90,.13);border-left-color:#ff5a5a}
+.ic-ladder.rr .rung.top .n{color:#ff8a8a}
+.ic-ladder.rr .rung.top .lv{color:#ff7a7a}
+.ic-ladder.rr .rung.hd .n,.ic-ladder.rr .rung.hd .v,.ic-ladder.rr .rung.hd .lv,.ic-ladder.rr .rung.hd .rt{
+  font-family:'Inter',system-ui,sans-serif;font-size:8.5px;font-weight:600;letter-spacing:1px;
+  color:#5f6d8a;text-shadow:none;text-transform:uppercase;
+}
 
 @media (max-width:640px){
   .rr-svg{max-width:250px}
@@ -1712,4 +1807,5 @@ body{
   .rr-msg{font-size:14px;min-height:48px}
   .rr-bigmult{font-size:19px;left:10px;bottom:8px}
   .rr-hud .ahud .k{font-size:8.5px;letter-spacing:.8px}
+  .rr-hud .ahud .v{font-size:14px}
 }

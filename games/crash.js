@@ -1,11 +1,32 @@
 import { el, clear, sleep, toast } from "../ui.js";
 import { stageShell, clamp } from "./common.js";
 import { infoBtn, openInfo, sec, ul, note, cap } from "./infocard.js";
+import { CONFIG } from "../state.js";
 import { sfx } from "../audio.js";
 
-const RATE = 0.55;
+// Rocket Crash's climb is a curve, not a straight ramp. In log-multiplier space
+//     ln(mult) = crashStart * t + crashAccel * t^2      (t = seconds in flight)
+// so the climb rate starts at `crashStart` per second and picks up 2*crashAccel every
+// second: the rocket eases off the pad and then gets faster and faster. `t` is the same
+// quantity that feeds the chart's x-axis, so the drawn line is the real curve. With
+// crashAccel = 0 this collapses to the old flat exponential (ln m = crashStart * t).
+// These numbers only set HOW LONG each multiplier takes to arrive -- the crash point is
+// drawn independently (P(crash >= m) = 0.97/m), so any tuning keeps the same 3% edge.
+const GROW0 = Math.max(0.001, CONFIG.crashStart);
+const GROW2 = Math.max(0, CONFIG.crashAccel);
 const EDGE = 0.03;
 const SCREEN_T = 3.2; // effective seconds of flight visible across the chart width
+
+function mOf(t) {
+  const tt = Math.max(0, t);
+  return Math.exp(GROW0 * tt + GROW2 * tt * tt);
+}
+// inverse of mOf: the seconds of flight at which the rocket reaches a multiplier
+function tOf(m) {
+  const l = Math.log(Math.max(1, m));
+  if (GROW2 <= 0) return l / GROW0;
+  return (Math.sqrt(GROW0 * GROW0 + 4 * GROW2 * l) - GROW0) / (2 * GROW2);
+}
 
 function axisTopFor(maxM) {
   const m = Math.min(1e18, Math.max(1.06, maxM));
@@ -26,16 +47,15 @@ function fmtMult(v) {
   if (!Number.isFinite(v)) return "\u221Ex";
   return v >= 1e4 ? fmtAxis(v) : v.toFixed(2) + "x";
 }
-const eT = (m) => Math.log(Math.max(1, m)) / RATE;
-
 export default {
   id: "crash",
   name: "Rocket Crash",
   icon: "\u{1F680}",
   action: "LAUNCH",
-  blurb: "The multiplier climbs. Cash out before the rocket blows up.",
+  blurb: "The multiplier climbs \u2014 easing off the pad, then faster and faster. Cash out before the rocket blows up.",
   payoutNote: () =>
     'Cash out before the crash and you get <b>bet \u00D7 multiplier</b>. Base return <span class="k">97%</span>. ' +
+    "The rocket eases off the pad and accelerates \u2014 the longer it flies the faster the multiplier compounds. " +
     "Flip <b>AUTO</b> on to bank at a target hands-free, or leave it off and hit <b>CASH OUT</b> yourself. Bank and the rocket still flies on \u2014 it re-rolls its own death, uncapped, so you watch where it <i>would</i> have blown. Lucky Coin perks push the rocket higher.",
   minBet: 1,
   canIdle: false,
@@ -53,7 +73,7 @@ export default {
 
     const root = stageShell(
       "Rocket Crash",
-      "Watch the multiplier climb. Get out before the kaboom.",
+      "The multiplier eases off the pad, then climbs faster and faster. Get out before the kaboom.",
       { info: infoBtn(() => openInfoCard()) },
       el("div", { class: "crash-wrap" },
         msgEl,
@@ -382,12 +402,12 @@ export default {
       ghostCrash = app.cheat ? Infinity : ghostFrom(mult, app.effects().luck);
       bankHistory(Number.isFinite(ghostCrash) ? ghostCrash : mult);
 
-      const tEffBank = Math.log(Math.max(1, mult)) / RATE;
+      const tEffBank = tOf(mult);
       spectate = true;
       sBase = tEffBank;
       rBase = (performance.now() - startT) / 1000;
       if (Number.isFinite(ghostCrash)) {
-        const remain = Math.max(0, Math.log(Math.max(1, ghostCrash)) / RATE - tEffBank);
+        const remain = Math.max(0, tOf(ghostCrash) - tEffBank);
         const tailFor = Math.min(3, Math.max(0.6, remain));
         warp = remain / tailFor;
       } else {
@@ -446,7 +466,7 @@ export default {
           msgEl.className = "bj-msg win";
           msgEl.textContent = "Auto cashed at " + tgt.toFixed(2) + "x";
           history.unshift(Number.isFinite(crashPoint) ? crashPoint : tgt); while (history.length > 10) history.pop(); renderHistory();
-          curMult = 1; trail = [{ t: 0, m: 1 }, { t: eT(tgt), m: tgt }];
+          curMult = 1; trail = [{ t: 0, m: 1 }, { t: tOf(tgt), m: tgt }];
           draw(false, true, 0);
           return { multiplier: tgt, crashPoint };
         }
@@ -455,7 +475,7 @@ export default {
         msgEl.className = "bj-msg lose";
         msgEl.textContent = "Crashed at " + crashPoint.toFixed(2) + "x";
         history.unshift(crashPoint); while (history.length > 10) history.pop(); renderHistory();
-        trail = [{ t: 0, m: 1 }, { t: eT(crashPoint), m: crashPoint }];
+        trail = [{ t: 0, m: 1 }, { t: tOf(crashPoint), m: crashPoint }];
         draw(true, false, 0);
         return { multiplier: 0, crashPoint };
       }
@@ -485,7 +505,7 @@ export default {
             return;
           }
           const t = spectate ? sBase + (tReal - rBase) * warp : tReal;
-          curMult = Math.exp(RATE * t);
+          curMult = mOf(t);
           const ceiling = spectate ? ghostCrash : crashPoint;
           if (curMult >= ceiling) {
             curMult = ceiling;
@@ -556,7 +576,7 @@ export default {
         el("div", { class: "ic-col" },
           sec("How a round wins",
             ul([
-              "The multiplier climbs from <b>1.00x</b> upwards the moment you launch.",
+              "The multiplier climbs from <b>1.00x</b> the moment you launch — slowly at first, then faster and faster: it eases off the pad, so the first couple of seconds only get you to about <b>2.00x</b>, but the climb keeps accelerating, and deep multipliers arrive in a blink.",
               "Press <b>CASH OUT</b> at any time and you bank <b>bet \u00D7 multiplier</b>.",
               "After you bank, the rocket <i>always</i> keeps flying \u2014 it shows you where it would have blown up, so you see how close you cut it. Your payout is locked in the moment you cash out.",
               "Wait too long and the rocket blows up \u2014 you lose the whole bet.",
@@ -574,6 +594,7 @@ export default {
               "It's drawn up front as <b>(1 \u2212 0.03) / (1 \u2212 u)</b> for a random <b>u</b>, then rounded down to a cent.",
               "That gives <b>P(crash \u2265 m) = 0.97 / m</b> \u2014 so the house keeps a flat <b>3%</b> edge.",
               "It's <b>memoryless</b>: surviving to 2.00x tells you nothing about 3.00x.",
+              "<b>The pace is not the odds:</b> the climb curve only decides <i>when</i> each multiplier shows up \u2014 the crash point is drawn before launch, so a lazy start and a wild finish never change that flat 3%.",
               "<b>No peeking:</b> the chart's axes never scale to the crash point — the rocket blows up wherever it happens to be, so its position on the chart tells you nothing about what's coming.",
               "<b>Where it would have blown:</b> the instant you cash out, the rocket's death is re-rolled from the same memoryless odds, conditioned on having got this far \u2014 that is <b>cash-out \u00D7 / (1 \u2212 u)</b>. There's <b>no cap</b>: it can blow a cent above your cash-out or run for billions, and every round re-rolls from scratch.",
             ])

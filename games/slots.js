@@ -5,7 +5,7 @@ import { infoBtn, openInfo, svgEl, gridMap, legend, sec, ul, note, cap, payChips
 import { sfx } from "../audio.js";
 
 const SYMBOLS = [
-  { id: "cherry", glyph: "\u{1F352}", w: 30, three: 4, two: 0, tier: 0 },
+  { id: "cherry", glyph: "\u{1F352}", w: 30, three: 4, two: 1, leftPair: true, tier: 0 },
   { id: "lemon", glyph: "\u{1F34B}", w: 25, three: 7, two: 0, tier: 0 },
   { id: "bell", glyph: "\u{1F514}", w: 18, three: 14, two: 2, tier: 1 },
   { id: "gem", glyph: "\u{1F48E}", w: 13, three: 34, two: 3, tier: 1 },
@@ -14,6 +14,13 @@ const SYMBOLS = [
 ];
 
 const CELL_H = 118;
+
+/* A pair normally pays wherever the two symbols sit, but the cherry pair only
+   counts on the left two reels — on the last two it pays nothing. */
+function pairLabel(s) {
+  if (!s.two) return "\u2013";
+  return s.leftPair ? "1st two " + s.two + "x" : "pair " + s.two + "x";
+}
 
 function weightsFor(luck) {
   return SYMBOLS.map((s) => {
@@ -33,6 +40,8 @@ function evaluate(ids) {
     if (c >= 3 && s.three) {
       if (!best || s.three > best.pay) best = { sym: s, pay: s.three, kind: 3 };
     } else if (c === 2 && s.two) {
+      /* left-anchored pairs (the cherry) must start on reel 1 */
+      if (s.leftPair && !(ids[0] === s.id && ids[1] === s.id)) continue;
       if (!best || s.two > best.pay) best = { sym: s, pay: s.two, kind: 2 };
     }
   }
@@ -44,16 +53,17 @@ export default {
   name: "Slots",
   icon: "\u{1F3B0}",
   action: "SPIN",
-  blurb: "Three reels, six symbols. Match three, or land a premium pair.",
+  blurb: "Three reels, six symbols. Match three, land a premium pair, or catch \u{1F352}\u{1F352} on the first two reels.",
   payoutNote: () =>
-    'Match <b>3 symbols</b> for a big payout, or a <b>pair</b> of \u{1F514}/\u{1F48E}/7\uFE0F\u20E3/\u2B50. ' +
+    'Match <b>3 symbols</b> for a big payout, a <b>pair</b> of \u{1F514}/\u{1F48E}/7\uFE0F\u20E3/\u2B50, ' +
+    'or \u{1F352}\u{1F352} on the <b>first two reels</b> \u2014 that one returns your credit (<b>1x</b>). ' +
     'Top prize: three \u2B50 = <span class="k">200x</span>. Lucky Coin perks load the reels.',
   minBet: 1,
 
   create(app) {
     const root = stageShell(
       "Slot Machine",
-      "Match symbols across the payline. Premium symbols pay on pairs too.",
+      "Match symbols across the payline. Premium symbols pay on pairs, \u{1F352}\u{1F352} pays on the first two reels.",
       { info: infoBtn(() => openInfoCard(), "PAY TABLE") },
       el("div", { class: "slots-wrap" },
         el("div", { class: "slot-result", id: "slotResultEl", text: "Place your bet and pull the lever" }),
@@ -77,7 +87,7 @@ export default {
                 el("div", { class: "paychip" },
                   el("span", { class: "g", text: s.glyph }),
                   el("b", { text: s.three + "x" }),
-                  el("span", { class: "pair", text: s.two ? "pair " + s.two + "x" : "\u2013" })
+                  el("span", { class: "pair", text: pairLabel(s) })
                 )
               )
             )
@@ -284,13 +294,18 @@ export default {
       if (win) {
         if (win.kind === 3) reelEls.forEach((r) => r.classList.add("win"));
         else reelEls.forEach((reel, i) => { if (ids[i] === win.sym.id) reel.classList.add("win"); });
-        const label = (win.kind === 3 ? "3\u00D7 " : "2\u00D7 ") + win.sym.glyph + "  \u2014  " + win.pay + "x";
+        const label = (win.kind === 3 ? "3\u00D7 " : (win.sym.leftPair ? "FIRST 2 " : "2\u00D7 ")) +
+          win.sym.glyph + "  \u2014  " + win.pay + "x";
         resultEl.className = "slot-result win";
         resultEl.textContent = label;
         if (!instant) toast(label, "win", 1600);
       } else {
         resultEl.className = "slot-result lose";
-        resultEl.textContent = glyphs.join(" ") + "  \u2014  no match";
+        /* two cherries on the right-hand reels look like a win but are not —
+           say why instead of a bare "no match" */
+        const late = ids[0] !== "cherry" && ids[1] === "cherry" && ids[2] === "cherry";
+        resultEl.textContent = glyphs.join(" ") + "  \u2014  " +
+          (late ? "\u{1F352}\u{1F352} only pays on the first two reels" : "no match");
       }
 
       return { multiplier: win ? win.pay : 0 };
@@ -324,6 +339,8 @@ export default {
           note: "Three of the same symbol anywhere on the payline \u2014 three \u2B50 is the top prize at <b>200\u00D7</b> your credit." },
         { label: "PAIR", cells: ["\u{1F514}", "\u{1F514}", "\u{1F352}"], win: true,
           note: "A <b>pair</b> pays when it's a premium symbol \u2014 \u{1F514}\u{1F514} = <b>2\u00D7</b>, and the pair of \u2B50 pays <b>10\u00D7</b>." },
+        { label: "\u{1F352}\u{1F352}", cells: ["\u{1F352}", "\u{1F352}", "\u{1F34B}"], win: true,
+          note: "The <b>first two reels</b> both \u{1F352} returns <b>1\u00D7</b> \u2014 your credit back. Move the pair to the last two reels and it pays nothing." },
         { label: "NO WIN", cells: ["\u{1F352}", "\u{1F34B}", "\u{1F514}"], win: false,
           note: "Three <b>different</b> symbols \u2014 no match, nothing pays." },
       ];
@@ -347,15 +364,16 @@ export default {
         el("div", { class: "ic-col" },
           sec("How a spin wins",
             ul([
-              "All three reels are read together: you win if <b>three of the same symbol</b> land on the payline, or a <b>pair</b> of a premium symbol.",
+              "All three reels are read together: you win if <b>three of the same symbol</b> land on the payline, if a <b>pair</b> of a premium symbol lands, or if the first two reels are both \u{1F352}.",
               "Only your single best result pays \u2014 you never collect two prizes from one spin.",
               "The payline runs straight through the middle of all three reels.",
             ])
           ),
-          sec("Premium pairs",
+          sec("Pairs",
             ul([
               "\u{1F514}, \u{1F48E}, 7\uFE0F\u20E3 and \u2B50 pay on a pair as well as a triple.",
-              "\u{1F352} and \u{1F34B} only pay when all three match.",
+              "\u{1F352}\u{1F352} pays <b>1\u00D7</b> \u2014 your credit back \u2014 but only when it sits on the <b>first two reels</b>. The same pair on the last two reels pays nothing.",
+              "\u{1F34B} only pays when all three match.",
               "\u2B50 is the long shot: <b>200\u00D7</b> a triple, <b>10\u00D7</b> a pair.",
             ])
           ),
@@ -369,12 +387,12 @@ export default {
       );
 
       const pay = payChips(SYMBOLS.slice().reverse().map((s) => ({
-        glyph: s.glyph, main: s.three + "x", note: s.two ? "pair " + s.two + "x" : "no pair",
+        glyph: s.glyph, main: s.three + "x", note: s.two ? pairLabel(s) : "no pair",
       })));
 
       openInfo("Lucky Sevens \u2014 Pay Table", el("div", { class: "ic" },
         top,
-        sec("Pays per credit", pay, note("Three of a kind is paid per credit staked. A pair only pays for the four premium symbols."))
+        sec("Pays per credit", pay, note("Three of a kind is paid per credit staked. A pair pays for the four premium symbols, and \u{1F352}\u{1F352} pays 1\u00D7 on the first two reels only \u2014 the last two pay nothing."))
       ));
     }
 

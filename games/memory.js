@@ -27,19 +27,27 @@ import { sfx } from "../audio.js";
 
      RANDOM    The whole pattern is re-rolled at the new length
                every pass — nothing carries over, it's a fresh
-               read each time. Steeper ladder (x1.33 a pass).
+               read each time. Steeper ladder (x1.33 a pass) and
+               it opens at FIVE colours, not three: a fresh read
+               of three colours is no test at all.
 
    The ladder is geometric, so the bank compounds; the safe
    threshold to push on is when your chance of clearing the
    next sequence beats 1 / step (about 79% in SEQUENCE, 75% in
-   RANDOM). Lengths run from memStartLen to memMaxLen; clear
-   the last one and the run cashes out by itself on the summit
-   payout, which is what keeps a perfect memoriser from
-   bleeding the machine forever.
+   RANDOM). Lengths run from the mode's own opening length
+   (memStartLen in SEQUENCE, memRandStartLen in RANDOM) up to
+   memMaxLen — the hard limit of 20 colours; clear the last one
+   and the run cashes out by itself on the summit payout, which
+   is what keeps a perfect memoriser from bleeding the machine
+   forever.
 
-   Flash and gap timings shrink as the pattern grows, down to
-   memMinFlashMs, so a long sequence blurs past — that decay,
-   not any RNG, is the difficulty curve.
+   Flash and gap timings start at memFlashMs/memGapMs and
+   shrink by memFlashDecay/memGapDecay for EVERY extra colour,
+   down to memMinFlashMs/memMinGapMs, so a pattern gets both
+   longer and faster as it grows and a long one blurs past —
+   that decay, not any RNG, is the difficulty curve. The ramp
+   freezes at memMaxLen colours, so the 20th colour is the
+   fastest this machine ever flashes.
    ========================================================= */
 
 const PADS = [
@@ -49,6 +57,15 @@ const PADS = [
   { color: "#4aa8ff", dim: "#122a44", hov: "#245f99", glyph: "\u25A0", name: "blue", key: "4" },
 ];
 const N = PADS.length;
+
+/* Opening length per mode: SEQUENCE opens at memStartLen, RANDOM at
+   memRandStartLen (a fresh read of only three colours is no test at all). Resolved
+   here, once, so the payout note, the info card and the engine cannot disagree.
+   `maxLen` is the hard ceiling on a sequence -- 20 colours by default -- and it is
+   also where the speed ramp freezes (see SPEED_CAP in showSequence). */
+const seqStart = clamp(Math.round(CONFIG.memStartLen) || 3, 2, 6);
+const randStart = clamp(Math.round(CONFIG.memRandStartLen) || 5, 2, 12);
+const maxLen = clamp(Math.round(CONFIG.memMaxLen) || 20, Math.max(seqStart, randStart) + 2, 40);
 
 const CX = 100, CY = 100, R_OUT = 95, R_IN = 41;
 const GAP_DEG = 3.2;
@@ -130,8 +147,9 @@ export default {
   payoutNote: () =>
     "The machine flashes a pattern of colours; repeat it and your bank climbs. Then it is the only choice that matters: " +
     "<b>CASH OUT</b>, or <b>NEXT PASS</b> to add one more colour. Miss a pad and the whole stake is gone. " +
-    "Patterns start at <b>" + Math.round(CONFIG.memStartLen) + " colours</b> and grow to <b>" + Math.round(CONFIG.memMaxLen) +
-    "</b>, flashing faster the longer they get. <b>SEQUENCE</b> keeps the pattern and adds to the end (<b>\u00D7" +
+    "Patterns start at <b>" + Math.round(seqStart) + " colours</b> in SEQUENCE and <b>" + Math.round(randStart) +
+    "</b> in RANDOM, and grow to <b>" + Math.round(CONFIG.memMaxLen) +
+    "</b>, flashing faster with every colour. <b>SEQUENCE</b> keeps the pattern and adds to the end (<b>\u00D7" +
     Math.max(1.01, CONFIG.memSeqStep).toFixed(2) + "</b> a pass); <b>RANDOM</b> re-rolls the whole thing at every length (<b>\u00D7" +
     Math.max(1.02, CONFIG.memRandStep).toFixed(2) + "</b> a pass). No dice anywhere \u2014 it is your memory against the ladder.",
 
@@ -141,21 +159,30 @@ export default {
     }
     if (!Number.isFinite(state.memory.bestLen) || state.memory.bestLen < 0) state.memory.bestLen = 0;
 
-    const startLen = clamp(Math.round(CONFIG.memStartLen) || 3, 2, 6);
-    const maxLen = clamp(Math.round(CONFIG.memMaxLen) || 20, startLen + 2, 40);
-    const maxPass = maxLen - startLen + 1;
+    /* the mode's opening length, and how many passes it takes to reach the ceiling
+       (SEQUENCE starts shorter, so it gets the longer track) */
+    const startFor = (m) => (m === "rand" ? randStart : seqStart);
+    const maxPassFor = (m) => maxLen - startFor(m) + 1;
 
     const stepOf = (m) => (m === "rand"
       ? Math.max(1.02, CONFIG.memRandStep)
       : Math.max(1.01, CONFIG.memSeqStep));
     const multOf = (m, p) => round2(Math.pow(stepOf(m), Math.max(0, p)));
 
+    /* Flash/gap time for a pattern of n colours: the base time shrunk by one decay
+       step per colour beyond the mode's opening length. `rampFor` freezes at
+       maxLen colours, so the ramp cannot run away if memMaxLen is raised, and the
+       floors stop a long pattern from collapsing into a single smear. */
+    const rampFor = (n) => Math.max(0, Math.min(n, maxLen) - startFor(mode));
+    const flashFor = (n) => Math.max(CONFIG.memMinFlashMs, CONFIG.memFlashMs * Math.pow(CONFIG.memFlashDecay, rampFor(n)));
+    const gapFor = (n) => Math.max(CONFIG.memMinGapMs, CONFIG.memGapMs * Math.pow(CONFIG.memGapDecay, rampFor(n)));
+
     /* ---------- closure state ---------- */
     let mode = "seq";
     let phase = "idle";         // idle | show | input | choose | over
     let seq = [];
     let pass = 0;               // sequences cleared this run
-    let length = startLen;      // the sequence length on the wheel right now
+    let length = seqStart;      // the sequence length on the wheel right now
     let inputIndex = 0;
     let inputResolve = null;
     let choiceResolve = null;
@@ -187,7 +214,7 @@ export default {
     }
     wheel.appendChild(svgEl("circle", { class: "mem-ring", cx: CX, cy: CY, r: R_OUT, fill: "none" }));
     wheel.appendChild(svgEl("circle", { class: "mem-hub", cx: CX, cy: CY, r: R_IN, fill: "url(#" + gradId + ")" }));
-    const hubLen = svgEl("text", { class: "mem-hub-len", x: CX, y: CY - 1, "text-anchor": "middle" }, String(startLen));
+    const hubLen = svgEl("text", { class: "mem-hub-len", x: CX, y: CY - 1, "text-anchor": "middle" }, String(seqStart));
     const hubSub = svgEl("text", { class: "mem-hub-sub", x: CX, y: CY + 22, "text-anchor": "middle" }, "READY");
     wheel.appendChild(hubLen);
     wheel.appendChild(hubSub);
@@ -199,19 +226,33 @@ export default {
     function lightAllOff() { for (let i = 0; i < N; i++) lightPad(i, false); }
 
     /* ---------- hud ---------- */
-    const hudPass = el("span", { text: "0 / " + maxPass });
-    const hudLen = el("span", { text: String(startLen) });
+    const hudPass = el("span", { text: "0 / " + maxPassFor("seq") });
+    const hudLen = el("span", { text: String(seqStart) });
     const hudBank = el("span", { class: "gold", text: "1.00" });
     const hudNext = el("span", { text: multOf("seq", 1).toFixed(2) });
     const hudBest = el("span", { text: bestMult().toFixed(2) });
 
+    /* The pip track is one pip per pass of the CURRENT mode, and the two modes have
+       different opening lengths (3 vs 5 colours), so it is rebuilt whenever the mode
+       changes rather than sized once. setMode() refuses to run mid-pass, so there is
+       never a live run to invalidate. */
     const pips = [];
     const track = el("div", { class: "mem-track" });
-    for (let k = 0; k < maxPass; k++) {
-      const pip = el("span", { class: "mem-pip", title: "Sequence " + (startLen + k) + " \u00B7 \u00D7" + multOf("seq", k + 1).toFixed(2) + " / \u00D7" + multOf("rand", k + 1).toFixed(2) });
-      pips.push(pip);
-      track.appendChild(pip);
+    function buildTrack() {
+      const start = startFor(mode);
+      const n = maxPassFor(mode);
+      pips.length = 0;
+      track.replaceChildren();
+      for (let k = 0; k < n; k++) {
+        const pip = el("span", {
+          class: "mem-pip",
+          title: "Pass " + (k + 1) + " \u00B7 " + (start + k) + " colours \u00B7 \u00D7" + multOf(mode, k + 1).toFixed(2),
+        });
+        pips.push(pip);
+        track.appendChild(pip);
+      }
     }
+    buildTrack();
 
     /* ---------- mode toggle ---------- */
     const seqBtn = el("button", { class: "mem-mode on", type: "button", onclick: () => setMode("seq") },
@@ -220,24 +261,25 @@ export default {
     );
     const randBtn = el("button", { class: "mem-mode", type: "button", onclick: () => setMode("rand") },
       el("span", { class: "mt", text: "RANDOM" }),
-      el("span", { class: "ms", text: "A brand-new pattern at the new length every pass. Harder \u2014 nothing carries over. Pays more a pass." })
+      el("span", { class: "ms", text: "A brand-new pattern at the new length every pass, starting at 5 colours. Harder \u2014 nothing carries over. Pays more a pass." })
     );
     function setMode(m) {
       if (phase === "show" || phase === "input" || phase === "choose") return;
       mode = m === "rand" ? "rand" : "seq";
       seqBtn.classList.toggle("on", mode === "seq");
       randBtn.classList.toggle("on", mode === "rand");
+      buildTrack();
       if (phase === "idle") {
         msgEl.textContent = mode === "seq"
           ? "SEQUENCE \u2014 the pattern keeps its order and grows a colour each pass."
-          : "RANDOM \u2014 a fresh pattern every pass, for a steeper ladder.";
+          : "RANDOM \u2014 a fresh pattern every pass, starting at " + randStart + " colours, for a steeper ladder.";
       }
       refresh();
     }
 
     /* ---------- controls ---------- */
     const cashKey = el("span", { class: "key", text: "bank your bet" });
-    const nextKey = el("span", { class: "key", text: "grow to " + startLen + " colours" });
+    const nextKey = el("span", { class: "key", text: "grow to " + seqStart + " colours" });
     const nextBtn = el("button", { class: "membtn go", type: "button", disabled: true, onclick: () => choose("next") },
       el("span", { class: "lbl", text: "NEXT PASS" }), nextKey
     );
@@ -278,15 +320,17 @@ export default {
     /* ---------- rendering ---------- */
     function refresh() {
       const live = phase === "show" || phase === "input" || phase === "choose";
+      const maxPass = maxPassFor(mode);
+      const start = startFor(mode);
       hudPass.textContent = pass + " / " + maxPass;
-      hudLen.textContent = String(live ? length : (phase === "over" ? length : startLen));
+      hudLen.textContent = String(live ? length : (phase === "over" ? length : start));
       hudBank.textContent = multFor(pass).toFixed(2);
       hudNext.textContent = pass >= maxPass ? "\u2014" : multFor(pass + 1).toFixed(2);
       hudBest.textContent = bestMult().toFixed(2);
-      hubLen.textContent = String(phase === "idle" ? startLen : length);
+      hubLen.textContent = String(phase === "idle" ? start : length);
       hubSub.textContent = phase === "idle" ? "READY" : (phase === "over" ? "OVER" : "\u00D7" + multFor(pass).toFixed(2));
       cashKey.textContent = pass > 0 ? "take \u00D7" + multFor(pass).toFixed(2) : "bank your bet";
-      nextKey.textContent = "grow to " + Math.min(maxLen, startLen + pass) + " colours";
+      nextKey.textContent = "grow to " + Math.min(maxLen, start + pass) + " colours";
       const locked = phase === "show" || phase === "input" || phase === "choose";
       seqBtn.disabled = locked;
       randBtn.disabled = locked;
@@ -331,11 +375,13 @@ export default {
       failInfo = null;
       refresh();
       const n = seq.length;
-      const flash = Math.max(CONFIG.memMinFlashMs, CONFIG.memFlashMs * Math.pow(0.95, n - startLen));
-      const gap = Math.max(85, CONFIG.memGapMs * Math.pow(0.965, n - startLen));
+      /* faster the longer the pattern gets -- flashFor()/gapFor() own the decay,
+         the floors and the 20-colour cap */
+      const flash = flashFor(n);
+      const gap = gapFor(n);
       lightAllOff();
       msgEl.className = "mem-msg watch";
-      msgEl.textContent = "WATCH \u2014 " + n + " colour" + (n === 1 ? "" : "s");
+      msgEl.textContent = "WATCH \u2014 " + n + " colour" + (n === 1 ? "" : "s") + " \u00B7 " + Math.round(flash) + "ms each";
       await sleep(420);
       for (let k = 0; k < n; k++) {
         if (destroyed || phase !== "show") { lightAllOff(); return false; }
@@ -414,12 +460,14 @@ export default {
 
       if (auto) {
         // unreachable in practice (canIdle is false), but a sane fallback: sim a run
+        const start = startFor(mode);
+        const mp = maxPassFor(mode);
         let p = 0;
         const chance = mode === "rand" ? 0.6 : 0.72;
-        while (p < maxPass && Math.random() < chance) p++;
+        while (p < mp && Math.random() < chance) p++;
         const m = p > 0 ? multOf(mode, p) : 0;
         pass = p;
-        length = clamp(startLen + p - 1, startLen, maxLen);
+        length = clamp(start + p - 1, start, maxLen);
         phase = "over";
         msgEl.className = "mem-msg " + (m > 0 ? "win" : "lose");
         msgEl.textContent = m > 0 ? "AUTO \u2014 banked \u00D7" + m.toFixed(2) : "AUTO \u2014 the pattern got away.";
@@ -430,7 +478,7 @@ export default {
 
       pass = 0;
       seq = [];
-      length = startLen;
+      length = startFor(mode);
       failInfo = null;
       phase = "show";
       msgEl.className = "mem-msg watch";
@@ -443,7 +491,7 @@ export default {
       try {
         for (;;) {
           pass++;
-          length = startLen + pass - 1;
+          length = startFor(mode) + pass - 1;
           if (pass === 1 || mode === "rand") seq = randomSeq(length);
           else seq = seq.concat([randPad()]);
           refresh();
@@ -511,7 +559,8 @@ export default {
     function lightAll(on) { for (let i = 0; i < N; i++) lightPad(i, on); }
 
     function bankBest() {
-      const len = clamp(startLen + pass - 1, startLen, maxLen);
+      const start = startFor(mode);
+      const len = clamp(start + pass - 1, start, maxLen);
       let changed = false;
       if (len > (state.memory.bestLen || 0)) { state.memory.bestLen = len; changed = true; }
       if (pass > 0 && multFor(pass) > (state.memory.bestMult || 1)) { state.memory.bestMult = multFor(pass); changed = true; }
@@ -526,7 +575,7 @@ export default {
       const cleared = pass === 0
         ? "Nothing was banked \u2014 that was still the first pattern."
         : "You had cleared " + pass + " sequence" + (pass === 1 ? "" : "s") +
-          " (up to " + (startLen + pass - 1) + " colours) \u2014 all unbanked.";
+          " (up to " + (startFor(mode) + pass - 1) + " colours) \u2014 all unbanked.";
       msgEl.className = "mem-msg lose";
       msgEl.textContent = "WRONG \u2014 it wanted " + PADS[want].name.toUpperCase() + " " + PADS[want].glyph + " next.";
       refresh();
@@ -589,17 +638,31 @@ export default {
 
     /* ---------- info card ---------- */
     function openInfoCard() {
-      const pickPasses = [1, 3, 5, 7, 9, 11, 13, 15, 17, maxPass]
-        .filter((p, i, a) => p <= maxPass && a.indexOf(p) === i);
-      const summit = multOf("rand", maxPass);
+      const passSeq = maxPassFor("seq");
+      const passRand = maxPassFor("rand");
+      const summitSeq = multOf("seq", passSeq);
+      const summitRand = multOf("rand", passRand);
+
+      /* One row per COLOUR COUNT, not per pass: the two modes open at different
+         lengths, so a pass-keyed table would sit SEQUENCE's 3-colour first pattern
+         next to RANDOM's 5-colour one and quietly lie. A length shorter than a
+         mode's opening length has no payout in that mode and prints a dash.
+         The bar is the bank in LOG scale -- the ladder spans ~x96, so a linear bar
+         would leave every early rung as a stub. */
+      const lens = [seqStart, randStart, 6, 7, 8, 10, 12, 14, 16, 18, maxLen]
+        .filter((n, i, a) => n >= seqStart && n <= maxLen && a.indexOf(n) === i);
+      const at = (m, n) => (n < startFor(m) ? null : multOf(m, n - startFor(m) + 1));
+      const barW = (v) => Math.max(4, Math.round((Math.log(Math.max(v, 1.01)) / Math.log(Math.max(summitRand, 1.01))) * 100));
+      const show = (v) => (v === null ? "\u2014" : "\u00D7" + v.toFixed(2));
       const ladder = el("div", { class: "ic-ladder mem" },
-        ...pickPasses.map((p) => {
-          const len = startLen + p - 1;
-          const top = len >= maxLen;
+        ...lens.map((n) => {
+          const s = at("seq", n), r = at("rand", n);
+          const top = n >= maxLen;
+          const ref = r === null ? s : r;
           return el("div", { class: "rung" + (top ? " top" : "") },
-            el("span", { text: len + " col" }),
-            el("span", { class: "bar", style: { width: Math.max(4, (multOf("rand", p) / summit) * 100) + "%" } }),
-            el("span", { class: "v", text: "\u00D7" + multOf("seq", p).toFixed(2) + " / \u00D7" + multOf("rand", p).toFixed(2) })
+            el("span", { text: n + " col" }),
+            el("span", { class: "bar", style: { width: barW(ref) + "%" } }),
+            el("span", { class: "v", text: show(s) + " / " + show(r) })
           );
         })
       );
@@ -626,16 +689,16 @@ export default {
         el("div", { class: "ic-col" },
           sec("How you play",
             ul([
-              "Press <b>START RECALL</b> to pay your stake. The machine flashes a sequence of <b>" + startLen + " colours</b>.",
+              "Press <b>START RECALL</b> to pay your stake. The machine flashes a sequence of <b>" + seqStart + " colours</b> \u2014 <b>" + randStart + "</b> in RANDOM mode.",
               "Repeat it by tapping the pads (keys <b>1\u20134</b> also work). Get the whole thing right and you clear the pass.",
-              "Then you choose: <b>CASH OUT</b> to keep your bank, or <b>NEXT PASS</b> to add one more colour to the pattern.",
+              "Then you choose: <b>CASH OUT</b> to keep your bank, or <b>NEXT PASS</b> to add one more colour to the pattern \u2014 which also makes it flash faster.",
               "Miss a single pad and the run ends \u2014 the stake and every unbanked multiplier are gone. Banked money is never at risk after you take it.",
             ])
           ),
           sec("Two modes",
             ul([
-              "<b>SEQUENCE</b> \u2014 the same pattern, one colour longer each pass. The order you already learned stays put, so you only carry the new colour on the end. Gentler ladder: <b>\u00D7" + stepOf("seq").toFixed(2) + "</b> a pass.",
-              "<b>RANDOM</b> \u2014 the whole pattern is re-rolled at the new length every pass. Nothing carries over and every read is fresh, so it pays <b>\u00D7" + stepOf("rand").toFixed(2) + "</b> a pass.",
+              "<b>SEQUENCE</b> \u2014 the same pattern, one colour longer each pass. The order you already learned stays put, so you only carry the new colour on the end. Opens at <b>" + seqStart + " colours</b> and pays <b>\u00D7" + stepOf("seq").toFixed(2) + "</b> a pass.",
+              "<b>RANDOM</b> \u2014 the whole pattern is re-rolled at the new length every pass. Nothing carries over and every read is fresh, so it opens at <b>" + randStart + " colours</b> and pays <b>\u00D7" + stepOf("rand").toFixed(2) + "</b> a pass.",
               "The mode is locked for the duration of a run, so choose it before you start.",
             ])
           ),
@@ -648,8 +711,8 @@ export default {
           ),
           sec("The summit",
             ul([
-              "Sequences run up to <b>" + maxLen + " colours</b>. Clear the last one and the run cashes out on its own for <b>\u00D7" + multOf("seq", maxPass).toFixed(2) + "</b> in SEQUENCE or <b>\u00D7" + multOf("rand", maxPass).toFixed(2) + "</b> in RANDOM.",
-              "Flash and gap timings shrink as the pattern grows, down to <b>" + Math.round(CONFIG.memMinFlashMs) + "ms</b> a colour, so long sequences blur past.",
+              "Sequences run up to <b>" + maxLen + " colours</b> \u2014 that is the hard limit. Clear the last one and the run cashes out on its own for <b>\u00D7" + summitSeq.toFixed(2) + "</b> in SEQUENCE (" + passSeq + " passes) or <b>\u00D7" + summitRand.toFixed(2) + "</b> in RANDOM (" + passRand + " passes).",
+              "Every extra colour makes the flash <b>" + Math.round((1 - CONFIG.memFlashDecay) * 100) + "%</b> shorter, down to <b>" + Math.round(CONFIG.memMinFlashMs) + "ms</b> a colour, so the pattern gets faster as well as longer and the 20th colour is the fastest the machine flashes.",
               "There is no dice roll anywhere in this machine \u2014 the only randomness is which colours the pattern uses.",
             ])
           )
@@ -658,8 +721,8 @@ export default {
 
       openInfo("Neon Recall \u2014 How to Win", el("div", { class: "ic" },
         top,
-        sec("Payout ladder \u2014 bank \u00D7 after each pass (SEQUENCE / RANDOM)", ladder,
-          note("Payouts are on your stake: a \u00D7" + multOf("seq", 7).toFixed(2) + " bank on a $10 bet returns <b>" + Math.round(10 * multOf("seq", 7)) + "</b>. The ladder is locked in <b>before</b> you pay, so there is no hidden scaling."))
+        sec("Payout ladder \u2014 bank \u00D7 by pattern length (SEQUENCE / RANDOM)", ladder,
+          note("Payouts are on your stake: a \u00D7" + multOf("seq", 7).toFixed(2) + " bank on a $10 bet returns <b>" + Math.round(10 * multOf("seq", 7)) + "</b>. The ladder is locked in <b>before</b> you pay, so there is no hidden scaling. RANDOM opens at <b>" + randStart + " colours</b>, which is why the shortest patterns show a dash in its column."))
       ));
     }
 

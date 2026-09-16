@@ -5,48 +5,89 @@ import { state, saveState, CONFIG } from "../state.js";
 import { sfx, preloadSpin } from "../audio.js";
 
 /* =========================================================
-   Russian Roulette -- one spin, double or nothing, and a drum
-   that gets heavier the deeper you push.
+   Russian Roulette -- a ten-rung ladder, a six-chamber drum,
+   and one live round waiting for you to get greedy.
 
-   Six chambers. The first spin carries rrLiveStart live round;
-   every time the bank DOUBLES the drum is re-loaded with one
-   more, up to rrLiveMax -- so by the top five of the six
-   chambers are live and a single empty one is left. The drum is
-   re-loaded and spun FRESH before every shot.
+   Six chambers, one buy-in at x1.00. Every shot is a FRESH load
+   and a FRESH whirl: nothing carries over and the drum has no
+   memory of you. rrLadder (main.pjs) is the whole game -- one row
+   per round, giving the bank a blank climbs to and the live rounds
+   the next load carries. With the shipped rows the opening round
+   is x1.10 on one live round and the tenth is x15.00 on five of
+   the six chambers, so the ladder gets richer and deadlier at the
+   same time.
 
-   SPIN       The drum whirls, the hammer falls. A blank doubles
-              the bank (rrDouble). A live round ends the run and
-              the bank goes with it.
+   SPIN       The drum whirls, the hammer falls. A blank climbs the
+              bank to the next rung and moves the round counter on;
+              the live round ends the run and the bank is gone.
 
    CASH OUT   Any time, at whatever the bank is standing at. The
-              bank is never paid until you ask for it, and the
-              number on the HUD is exactly what you keep -- rrRake
-              is a cage cut and ships at 0.
+              bank is never paid until you ask for it, and the number
+              on the HUD is exactly what you keep -- rrRake is a cage
+              cut and ships at 0. Surviving the top rung takes SPIN
+              away entirely: there is nothing left to climb for, so
+              the run has to be banked.
 
-   There are no lives, no counters and no tells. Nothing shows you
-   where the round is sitting, and nothing tells you how heavy the
-   drum has become: it is a fresh load and a fresh whirl, always,
-   and nothing you know changes the next spin.
+   The round being played is shown (the HUD's Round cell, and the
+   message after each blank names the next load), but the drum
+   itself is never a tell: the load is shuffled fresh for every
+   spin and nothing marks where the round is sitting.
 
-   Because the danger climbs while the payout stays a flat x2, the
-   run is generous to whoever stops early and brutal to whoever
-   does not -- cashing at x4 or x8 beats x2 on average. That is
-   deliberate: the whole game is the nerve to walk away, and not
-   knowing how much drum is left between you and the round.
+   The ladder is NOT fair at any rung. Surviving to round n and
+   cashing there returns (the chained survival odds) x (that rung's
+   multiplier): 0.917 for round 1, then 0.833, 0.793, 0.579 ... down
+   to 0.036 at the top. The whole game is the nerve to walk away,
+   and the maths is on the side of whoever does.
    ========================================================= */
 
 const CH = clamp(Math.round(CONFIG.rrChambers) || 6, 4, 8);
-const LIVE_START = clamp(Math.round(CONFIG.rrLiveStart === undefined ? 1 : CONFIG.rrLiveStart), 1, CH - 1);
-const LIVE_MAX = clamp(Math.round(CONFIG.rrLiveMax === undefined ? CH - 1 : CONFIG.rrLiveMax), LIVE_START, CH - 1);
-const DOUBLE = Math.max(1.01, Number(CONFIG.rrDouble) || 2);
 const RAKE = clamp(CONFIG.rrRake, 0, 0.5);
 
-/* How heavy the drum is for the NEXT spin. One live round to open, and one more
-   every time the bank doubles -- so the deeper the run goes the deadlier the
-   load, until only a single empty chamber is left. The player is never told
-   this number: nothing on screen reveals how much drum is loaded. */
-function liveFor(blanks) {
-  return clamp(blanks, LIVE_START, LIVE_MAX);
+/* The shipped ladder, used whenever CONFIG.rrLadder is missing or unusable, so a
+   broken or absent pjs table still leaves a playable machine (the rrLadder block in
+   main.pjs explains the rows and prints the returns they imply). */
+const DEFAULT_LADDER = [
+  [1.10, 1], [1.20, 1], [1.37, 1], [1.50, 2], [2.00, 2],
+  [2.75, 2], [3.50, 3], [5.00, 3], [7.50, 4], [15.00, 5],
+];
+
+/* Normalise whatever came out of main.pjs into ascending {mult, live} rungs: rows
+   that are not a sane [multiplier > 1, live >= 1] pair are dropped, live rounds are
+   clamped to the drum (a table promising more live rounds than chambers would be
+   capped at all-but-one anyway) and the multiplier is rounded to the 2dp the HUD
+   prints. */
+function buildLadder(src) {
+  const rows = [];
+  const list = Array.isArray(src) ? src : [];
+  for (const r of list) {
+    if (!Array.isArray(r)) continue;
+    const mult = round2(Number(r[0]));
+    const live = Math.round(Number(r[1]));
+    if (!Number.isFinite(mult) || mult <= 1 || !Number.isFinite(live) || live < 1) continue;
+    rows.push({ mult, live: clamp(live, 1, CH - 1) });
+  }
+  if (!rows.length) {
+    for (const pair of DEFAULT_LADDER) rows.push({ mult: round2(pair[0]), live: clamp(pair[1], 1, CH - 1) });
+  }
+  rows.sort((a, b) => (a.mult - b.mult) || (a.live - b.live));
+  return rows;
+}
+
+const LADDER = buildLadder(CONFIG.rrLadder);
+const RUNGS = LADDER.length;
+const TOP_MULT = LADDER[RUNGS - 1].mult;
+const TOP_LIVE = LADDER[RUNGS - 1].live;
+/* where the HUD starts calling the bank hot, and where a blank is worth confetti:
+   the middle rung and the 60%-up rung of whatever ladder is in play */
+const HOT_MULT = LADDER[Math.max(0, Math.ceil(RUNGS / 2) - 1)].mult;
+const BIG_MULT = LADDER[Math.max(0, Math.ceil(RUNGS * 0.6) - 1)].mult;
+
+/* The rung standing on the table after `survived` blanks. This single lookup decides
+   both how heavy the next load is and what the next blank pays, so the ladder in
+   main.pjs is the only thing that shapes a run. Past the top rung it sticks on the
+   last row (SPIN is disabled there, so nothing should ever ask). */
+function rungFor(survived) {
+  return LADDER[clamp(Math.floor(survived) || 0, 0, RUNGS - 1)];
 }
 
 const CX = 100, CY = 106, RING_R = 62, HOLE_R = 17.5, STEP = 360 / CH;
@@ -178,11 +219,13 @@ export default {
   action: "LOAD THE CYLINDER",
   canIdle: false,
   minBet: 1,
-  blurb: "Six chambers and a drum that re-loads heavier the further you push — one live round to open, five by the top, until a single empty chamber is left. A blank doubles the bank; the live round ends the run. Cash out any time, and the number the bank shows is exactly what you keep.",
+  blurb: "Six chambers and a ten-rung ladder you buy into once: a blank climbs the bank up the ladder, the live round ends the run and takes it. It opens at ×" +
+    LADDER[0].mult.toFixed(2) + " on " + LADDER[0].live + " live round and the top rung is ×" + TOP_MULT.toFixed(2) +
+    " on " + TOP_LIVE + " of the " + CH + " chambers — a single empty one. Cash out any time, and the number the bank shows is exactly what you keep.",
   payoutNote: () =>
-    "One buy-in, one bank, and a drum re-loaded and spun before every shot. It opens with <b>" + LIVE_START +
-    " live</b> and gains a live round <b>every time the bank doubles</b>, up to <b>" + LIVE_MAX + " of " + CH +
-    "</b> — so the deeper you push the deadlier the drum, and nothing on screen tells you how heavy it has become. A blank <b>doubles</b> the bank; the live round ends the run, and <b>CASH OUT</b> any time " +
+    "One buy-in at ×1.00, one bank, and a drum re-loaded and spun fresh before every shot. Each round is one rung of a <b>" + RUNGS +
+    "-round ladder</b>: round 1 pays ×" + LADDER[0].mult.toFixed(2) + " on <b>" + LADDER[0].live + " live</b> of " + CH +
+    ", and the top rung pays ×" + TOP_MULT.toFixed(2) + " on <b>" + TOP_LIVE + " live</b> — a single empty chamber left. A blank climbs to the next rung; the live round ends the run and the bank goes with it. There is nothing left to spin for once you are at the top, so <b>CASH OUT</b> any time " +
     (RAKE > 0
       ? "keeps what you hold less a <b>" + (RAKE * 100).toFixed(1) + "%</b> cut at the cage."
       : "keeps exactly what the bank says — no cut, no fine print."),
@@ -200,8 +243,8 @@ export default {
     /* ---------- run state ---------- */
     let stake = Math.max(1, Math.round(Number(app.bet) || 1));
     let bank = 1;               // the multiplier on the table, opened at x1.00
-    let blanks = 0;             // spins survived this run
-    let order = rolledLoad(LIVE_START);
+    let blanks = 0;             // rounds survived this run
+    let order = rolledLoad(rungFor(0).live);
     let landIdx = 0;            // the chamber under the hammer
     let outcome = null;         // null | "safe" | "dead"
     let phase = "idle";         // idle | ready | spinning | over
@@ -255,6 +298,7 @@ export default {
     svg.appendChild(pointer);
 
     /* ---------- hud / chrome ---------- */
+    const hudRound = el("span", { text: "1/" + RUNGS });
     const hudBank = el("span", { text: "1.00" });
     const hudCash = el("span", { text: fmt(stake) });
     const hudBest = el("span", { text: bestOf().toFixed(2) });
@@ -263,7 +307,7 @@ export default {
     const hintEl = el("div", { class: "rr-hint" });
 
     /* ---------- controls ---------- */
-    const spinSub = el("span", { class: "key", text: "double or nothing" });
+    const spinSub = el("span", { class: "key", text: "round 1 of " + RUNGS });
     const cashSub = el("span", { class: "key", text: "keep " + fmt(stake) });
     const spinBtn = el("button", { class: "rrbtn spin", type: "button", disabled: true, onclick: () => act("spin") },
       el("span", { class: "lbl", text: "SPIN" }), spinSub);
@@ -274,10 +318,11 @@ export default {
       el("div", { class: "slot-marquee" },
         el("span", { class: "lights" }, el("i"), el("i"), el("i")),
         el("span", { class: "marquee-title", text: "RUSSIAN ROULETTE" }),
-        el("span", { class: "sub", text: CH + " CHAMBERS · DOUBLE OR NOTHING" }),
+        el("span", { class: "sub", text: CH + " CHAMBERS · " + RUNGS + " ROUNDS" }),
         el("span", { class: "lights" }, el("i"), el("i"), el("i"))
       ),
       el("div", { class: "rr-hud" },
+        el("div", { class: "ahud" }, el("span", { class: "k", text: "Round" }), el("span", { class: "v" }, hudRound)),
         el("div", { class: "ahud" }, el("span", { class: "k", text: "Bank" }), el("span", { class: "v gold" }, el("span", { text: "\u00D7" }), hudBank)),
         el("div", { class: "ahud" }, el("span", { class: "k", text: "Cash out" }), el("span", { class: "v" }, hudCash)),
         el("div", { class: "ahud" }, el("span", { class: "k", text: "Best ever" }), el("span", { class: "v" }, el("span", { text: "\u00D7" }), hudBest))
@@ -290,7 +335,8 @@ export default {
 
     const root = stageShell(
       "Russian Roulette",
-      "Six chambers and a drum that re-loads heavier every time the bank doubles — one live round to open, five by the top, until a single empty chamber is left.",
+      "Six chambers and a " + RUNGS + "-round ladder you buy into once — round 1 pays ×" + LADDER[0].mult.toFixed(2) +
+      " and the top rung pays ×" + TOP_MULT.toFixed(2) + " on " + TOP_LIVE + " of the " + CH + " chambers, with a single empty one left.",
       { info: infoBtn(() => openInfoCard()) },
       el("div", { class: "rr-wrap" }, cab)
     );
@@ -379,18 +425,23 @@ export default {
       const ready = phase === "ready";
       const over = phase === "over";
       const spinning = phase === "spinning";
+      const top = blanks >= RUNGS;                  // stood on the last rung: nothing left to climb
+      const round = Math.min(blanks + 1, RUNGS);    // the round on the table now
       const net = netNow();
+      hudRound.textContent = round + "/" + RUNGS;
+      hudRound.parentElement.className = "v" + (top ? " warn" : "");
       hudBank.textContent = bank.toFixed(2);
-      hudBank.parentElement.className = "v " + (bank <= 0 ? "bad" : bank >= 4 ? "safe" : "gold");
+      hudBank.parentElement.className = "v " + (bank <= 0 ? "bad" : bank >= BIG_MULT ? "safe" : "gold");
       hudCash.textContent = fmt(stake * net);
       hudBest.textContent = bestOf().toFixed(2);
       bigMult.textContent = "\u00D7" + bank.toFixed(2);
-      bigMult.classList.toggle("hot", bank >= 8);
-      spinBtn.disabled = !ready;
+      bigMult.classList.toggle("hot", bank >= HOT_MULT);
+      spinBtn.disabled = !ready || top;
       cashBtn.disabled = !(ready && bank > 0);
       spinSub.textContent = spinning ? "the drum is turning…"
-        : ready ? "double or nothing"
-          : over && bank > 0 ? "run banked" : "the drum is loaded";
+        : ready && top ? "top of the ladder \u2014 cash it"
+          : ready ? "round " + round + " of " + RUNGS + " \u00B7 " + rungFor(blanks).live + " live"
+            : over && bank > 0 ? "run banked" : "the drum is loaded";
       cashSub.textContent = ready ? "keep " + fmt(stake * net)
         : over && bank > 0 ? "banked " + fmt(stake * net) : "nothing to bank";
       svg.classList.toggle("ready", ready);
@@ -447,8 +498,8 @@ export default {
     }
 
     async function spin() {
-      const live = liveFor(blanks);
-      order = rolledLoad(live);
+      const rung = rungFor(blanks);
+      order = rolledLoad(rung.live);
       landIdx = Math.floor(Math.random() * CH);
       const dead = !!order[landIdx];
       outcome = null;
@@ -476,14 +527,18 @@ export default {
         return true;
       }
 
-      bank = round2(bank * DOUBLE);
+      bank = rung.mult;
       blanks += 1;
-      say("<b>CLICK \u2014 blank.</b> The bank doubles to \u00D7<b>" + bank.toFixed(2) + "</b> \u00B7 " + blanks +
-        " blank" + (blanks === 1 ? "" : "s") + " behind you.", "win");
+      const round = Math.min(blanks + 1, RUNGS);
+      const next = rungFor(blanks);
+      say("<b>CLICK \u2014 blank.</b> The bank climbs to \u00D7<b>" + bank.toFixed(2) + "</b> \u00B7 round " + blanks +
+        " survived" + (blanks === RUNGS
+          ? " \u2014 <b>that is the top of the ladder</b>, and there is nothing left to spin for."
+          : ", and round <b>" + round + "</b> loads <b>" + next.live + " live</b>."), "win");
       popMult();
       if (!quiet) {
         floatAtElement(svg, "\u00D7" + bank.toFixed(2), "win");
-        if (bank >= 16) app.confetti(bank >= 64 ? 60 : 28);
+        if (bank >= BIG_MULT) app.confetti(bank >= TOP_MULT ? 60 : 28);
       }
       refresh();
       return false;
@@ -494,13 +549,13 @@ export default {
       const m = netNow();
       if (m > bestOf()) R.bestMult = m;
       saveState();
-      say("<b>CASHED OUT at ×" + m.toFixed(2) + ".</b> " + blanks + " blank" + (blanks === 1 ? "" : "s") +
-        " and a live round that never found you. " +
+      say("<b>CASHED OUT at ×" + m.toFixed(2) + ".</b> " + blanks + " round" + (blanks === 1 ? "" : "s") +
+        " survived and a live round that never found you. " +
         (RAKE > 0
           ? "The cage takes its " + (RAKE * 100).toFixed(1) + "% and the money is yours."
           : "The bank is yours, to the cent."), "win");
-      sfx.cash(m >= 32 ? 4 : m >= 8 ? 3 : m >= 2 ? 2 : 1);
-      if (!quiet && m >= 4) app.confetti(m >= 32 ? 90 : 40);
+      sfx.cash(m >= TOP_MULT ? 4 : m >= BIG_MULT ? 3 : m >= LADDER[Math.min(RUNGS - 1, 1)].mult ? 2 : 1);
+      if (!quiet && m >= BIG_MULT) app.confetti(m >= TOP_MULT ? 90 : 40);
       refresh();
       return m;
     }
@@ -552,12 +607,12 @@ export default {
       bank = 1;
       blanks = 0;
       outcome = null;
-      order = rolledLoad();
+      order = rolledLoad(rungFor(0).live);
       actionResolve = null;
       quiet = false;
       phase = "ready";
       R.runs = (R.runs || 0) + 1;
-      say("<b>" + CH + " chambers, spun fresh for every shot.</b> A blank doubles the bank; the live round ends the run and takes it. Cash out while your nerve holds.", "info");
+      say("<b>Round 1 of " + RUNGS + ": ×" + LADDER[0].mult.toFixed(2) + " on " + LADDER[0].live + " live.</b> A blank climbs the ladder; the live round ends the run and takes the bank. Cash out while your nerve holds.", "info");
       refresh();
       await sleep(520);
       if (destroyed) { busy = false; return { multiplier: 1, cancelled: true }; }
@@ -598,78 +653,105 @@ export default {
 
     /* ---------- info card ---------- */
     function openInfoCard() {
+      /* live-round positions for a still drum holding `n` rounds, spread around the
+         ring so a reader can count them at a glance */
       const idxFor = (n) => { const a = []; for (let k = 0; k < n; k++) a.push(Math.round((k * CH) / n)); return a; };
 
+      /* The ladder with the maths attached: `reach` is the chance of surviving to the
+         END of that round (the chained 1 - live/CH of every rung up to and including
+         it) and `ret` is what a buy-in cashed there returns on average. Both are read
+         off the live table, so retuning main.pjs retunes this card too. */
+      let reach = 1;
+      const rows = LADDER.map((r, i) => {
+        reach *= 1 - r.live / CH;
+        return { n: i + 1, mult: r.mult, live: r.live, reach, ret: reach * r.mult };
+      });
+      const best = rows.reduce((a, b) => (b.ret > a.ret ? b : a), rows[0]);
+      const top = rows[rows.length - 1];
+      const pct = (v) => (v * 100).toFixed(1) + "%";
+
       const runSec = sec("The run", ul([
-        "You buy in <b>once</b>. The bank opens at <b>×1.00</b> and there is nothing to top up — nothing is ever charged to your balance to try again.",
-        "<b>No lives and no counters.</b> There is no chamber track to read, no look to buy and no skip to spend. A single live round ends the run.",
+        "You buy in <b>once</b> at ×1.00 and there is nothing to top up — no extra spin, no re-load and no second life is ever charged to your balance.",
+        "The HUD's <b>Round</b> cell is the round on the table, and the ladder has <b>" + RUNGS + " rungs</b>. The drum is re-loaded and spun fresh before <i>every</i> shot, and nothing marks where the live round is sitting.",
         "Your run ends when you <b>CASH OUT</b>, or when the round finds you — and the bank goes with it.",
       ]));
 
-      const spinSec = sec("SPIN — double or nothing", ul([
-        "The drum is re-loaded and spun fresh before <i>every</i> shot. Survive and the bank <b>doubles</b> (×" + DOUBLE.toFixed(2) + "); take the live round and it is over — you lose the lot.",
-        "<b>Nothing you know changes the next spin.</b> The drum has no memory and no tell: it never gets “hotter” or “safer”, and the last blank has no say in the next one.",
+      const spinSec = sec("SPIN — one rung at a time", ul([
+        "The bank opens at ×1.00. A blank climbs it to the <b>next rung</b>: ×" + LADDER[0].mult.toFixed(2) + " on the first, ×" + TOP_MULT.toFixed(2) + " on the " + RUNGS + "th and last.",
+        "The live round ends the run and takes the whole bank — there is no partial payout and nothing to salvage.",
+        "<b>Nothing you know changes the next spin.</b> The load is shuffled fresh every time, the drum has no memory, and the last blank has no say in the next one.",
       ]));
 
-      const heavierSec = sec("The drum gets heavier", ul([
-        "It opens with <b>" + LIVE_START + " live</b> of the " + CH + " chambers. Every time the bank <b>doubles</b>, the next load carries <b>one more live round</b> — " +
-        LIVE_START + ", " + (LIVE_START + 1) + ", " + (LIVE_START + 2) + "… up to <b>" + LIVE_MAX + " of " + CH + "</b>, until only a <b>single empty chamber</b> is left.",
-        "Nothing on screen shows how heavy the drum has become while you play. The deeper you push the likelier the next spin is the one — the ladder below is the only place that shows it.",
+      const heavierSec = sec("Every rung is heavier", ul([
+        "The ladder pays more and loads deadlier at the same time: round 1 carries <b>" + LADDER[0].live + " live</b> of the " + CH +
+        " chambers and the top rung carries <b>" + TOP_LIVE + "</b> — a single empty chamber left.",
+        "The table below is the whole game: the round, the bank it pays, the live rounds it loads, and the average return on a buy-in cashed there. Nothing on the screen telegraphs the load while you play — the round you are on is the only thing shown.",
       ]));
 
       const cashSec = sec("CASH OUT — the only way to keep it", ul([
         RAKE > 0
           ? "Any time, at whatever the bank is standing at. The cage takes its <b>" + (RAKE * 100).toFixed(1) + "%</b> and the rest is yours."
           : "Any time, and the multiplier the bank shows is <b>exactly</b> what you keep — no cut, no fine print.",
-        "There is no cap on the bank. Stay as long as your nerve holds.",
+        "Surviving the top rung takes <b>SPIN</b> away entirely: the drum cannot get heavier and there is nothing left to climb for, so the run has to be banked.",
+        "There is no cap on the bank beyond the ladder's own top.",
       ]));
 
-      const rungs = [];
-      rungs.push(el("div", { class: "rung" },
-        el("span", { text: "×1" }),
-        el("div", { class: "bar", style: "width:" + Math.round((LIVE_START / CH) * 100) + "%" }),
-        el("span", { class: "v", text: LIVE_START + " live" })
-      ));
-      for (let L = LIVE_START + 1; L <= LIVE_MAX; L++) {
-        const bank = Math.pow(DOUBLE, L);
-        const bankTxt = "×" + (bank >= 1000 ? Math.round(bank).toLocaleString("en-US") : bank.toFixed(0));
-        const cls = "rung" + (L === LIVE_MAX ? " top" : L / CH >= 0.5 ? " hot" : "");
-        rungs.push(el("div", { class: cls },
-          el("span", { text: bankTxt }),
-          el("div", { class: "bar", style: "width:" + Math.round((L / CH) * 100) + "%" }),
-          el("span", { class: "v", text: L + " live" })
-        ));
-      }
-      const ladder = el("div", { class: "ic-ladder" }, ...rungs);
+      const ladder = el("div", { class: "ic-ladder rr" },
+        el("div", { class: "rung hd" },
+          el("span", { class: "n", text: "R" }),
+          el("div"),
+          el("span", { class: "v", text: "BANK" }),
+          el("span", { class: "lv", text: "DRUM" }),
+          el("span", { class: "rt", text: "RET" })
+        ),
+        ...rows.map((r) => el("div", {
+          class: "rung" + (r.n === RUNGS ? " top" : r.ret === best.ret ? " best" : r.live >= CH / 2 ? " hot" : ""),
+        },
+          el("span", { class: "n", text: String(r.n) }),
+          el("div", { class: "bar", style: "width:" + Math.round((r.live / CH) * 100) + "%" }),
+          el("span", { class: "v", text: "\u00D7" + r.mult.toFixed(2) }),
+          el("span", { class: "lv", text: r.live + " live" }),
+          el("span", { class: "rt", text: pct(r.ret) })
+        ))
+      );
+
+      const minis = el("div", { class: "rr-minis" },
+        el("div", { class: "rr-mini-card" }, miniCyl(idxFor(LADDER[0].live)), cap("Round 1 · " + LADDER[0].live + " live")),
+        el("div", { class: "rr-mini-card" }, miniCyl(idxFor(TOP_LIVE)), cap("Round " + RUNGS + " · " + TOP_LIVE + " live"))
+      );
 
       const visual = el("div", { class: "ic-visual" },
-        el("div", { class: "rr-mini-wrap" }, miniCyl(idxFor(LIVE_START))),
-        cap("The drum is re-loaded and spun fresh before every shot, and it is never the same drum twice — it gets heavier the deeper you go. There is no round to find and no chamber to read, only the spin, the click, and the bang."),
+        minis,
+        cap("The drum is re-loaded and spun fresh before every shot, and it is never the same drum twice — it gets heavier as you climb. There is no round to find and no chamber to read, only the spin, the click, and the bang."),
         ladder
       );
 
-      const top = el("div", { class: "ic-top" },
+      const topEl = el("div", { class: "ic-top" },
         el("div", { class: "ic-map" }, visual),
         el("div", { class: "ic-col" }, runSec, spinSec, heavierSec, cashSec)
       );
 
       const pay = payChips([
-        { glyph: "\u{1F4A8}", main: "\u00D7" + DOUBLE.toFixed(2), note: "blank — bank doubles" },
+        { glyph: "\u{1F4A8}", main: "\u00D7" + LADDER[0].mult.toFixed(2), note: "round 1 — a blank" },
         { glyph: "\u{1F480}", main: "LOSE ALL", note: "the live round", cls: "scat" },
-        { glyph: "\u{1F4C8}", main: LIVE_START + "\u2192" + LIVE_MAX, note: "live rounds, rising", cls: "scat" },
-        { glyph: "\u26AA", main: "1 empty", note: "left at the top", cls: "scat" },
+        { glyph: "\u{1F4C8}", main: LADDER[0].live + "\u2192" + TOP_LIVE, note: "live rounds, rising", cls: "scat" },
+        { glyph: "\u{1F3C1}", main: "\u00D7" + TOP_MULT.toFixed(2), note: "the top rung", cls: "scat" },
       ]);
 
       openInfo("Russian Roulette — How to Win", el("div", { class: "ic" },
-        top,
+        topEl,
         sec("On the table", pay,
-          note("Nothing here is for sale: no insurance, no skips, no second life. The drum takes on a live round every time the bank doubles and never gives one back — so the deeper you go, the fewer empty chambers stand between you and the end."))
+          note("<b>What the ladder pays.</b> The <i>RET</i> column is what a buy-in cashed on that rung returns on average — the chance of surviving that far times the multiplier it pays. " +
+            "The best of them is <b>round " + best.n + " at " + pct(best.ret) + "</b>, and every rung above it returns less (the top rung returns " + pct(top.ret) + "). " +
+            "So the ladder's edge is " + pct(1 - best.ret) + ", and it sits with whoever walks away: one more spin is always the worse bet, however tempting the next rung looks." +
+            (RAKE > 0 ? " The cage's " + (RAKE * 100).toFixed(1) + "% cut comes off on top of that." : "")))
       ));
     }
 
     /* ---------- boot ---------- */
     refresh();
-    say("<b>" + CH + " chambers, spun fresh for every shot.</b> Load the cylinder when you are ready.", "info");
+    say("<b>" + CH + " chambers, " + RUNGS + " rounds, one buy-in.</b> Round 1 pays ×" + LADDER[0].mult.toFixed(2) +
+      " and the ladder tops out at ×" + TOP_MULT.toFixed(2) + ". Load the cylinder when you are ready.", "info");
     hintEl.innerHTML = "<kbd>SPACE</kbd> spin \u00B7 <kbd>C</kbd> cash out";
     paint();
 

@@ -334,7 +334,7 @@ function buildNav() {
     frogger: "timing \u00B7 +0.05 a lane \u00B7 no idle",
     memory: "repeat the flash \u00B7 no idle",
     chest: "3 of 9 chests pay",
-    revolver: "double or nothing · the drum gets heavier · no idle",
+    revolver: "10 rungs \u00B7 house edge 8.3% \u00B7 no idle",
   };
   for (const g of GAMES) {
     const btn = el("button", {
@@ -388,7 +388,7 @@ function mountGame(id) {
 /* =========================================================
    bet panel
    ========================================================= */
-let betInput, playBtn, noteEl, statsEl, betTotalEl, historyEl;
+let betInput, playBtn, noteEl, statsEl, betTotalEl, historyEl, tableMiniEl;
 
 function buildBetPanel() {
   clear(topbar.betPanel);
@@ -427,6 +427,8 @@ function buildBetPanel() {
     el("div", { class: "panel-head", text: "History" }),
     el("button", { class: "linkbtn", type: "button", text: "VIEW ALL", onclick: openHistoryModal })
   ));
+  tableMiniEl = el("div", { class: "hist-mini-wrap", hidden: true });
+  topbar.betPanel.appendChild(tableMiniEl);
   historyEl = el("div", { class: "hist hist-recent" });
   topbar.betPanel.appendChild(historyEl);
   renderStats();
@@ -514,43 +516,208 @@ function histEmpty(text) {
   return el("div", { class: "hist-empty", text });
 }
 
+/* ---------------------------------------------------------
+   per-table breakdown ("what did this table do to me?")
+   gross profit won, gross money lost, net difference, win rate
+   --------------------------------------------------------- */
+
+/* One row per machine — played tables first (busiest at the top), then the
+   ones still sitting dark, so the list always covers the whole floor. */
+function tableBreakdown() {
+  const byGame = state.stats.byGame || {};
+  const rows = GAMES.map((g, order) => {
+    const s = byGame[g.id] || {};
+    const plays = Math.max(0, Math.round(Number(s.plays) || 0));
+    const staked = Math.max(0, Math.round(Number(s.staked) || 0));
+    const returned = Math.max(0, Math.round(Number(s.returned) || 0));
+    const wins = Math.max(0, Math.round(Number(s.wins) || 0));
+    const losses = Math.max(0, Math.round(Number(s.losses) || 0));
+    return {
+      g, order, plays, staked, returned, wins, losses,
+      won: Math.max(0, Math.round(Number(s.won) || 0)),
+      lost: Math.max(0, Math.round(Number(s.lost) || 0)),
+      /* net = returned - staked, which by construction equals won - lost */
+      net: returned - staked,
+      pushes: Math.max(0, plays - wins - losses),
+      rate: plays > 0 ? wins / plays : null,
+    };
+  });
+  rows.sort((a, b) => (b.plays - a.plays) || (a.order - b.order));
+  return rows;
+}
+
+function signed(n) {
+  const v = Math.round(Number(n) || 0);
+  return (v > 0 ? "+" : v < 0 ? "-" : "") + fmt(Math.abs(v));
+}
+
+function rateText(r) {
+  return r.rate === null ? "\u2014" : Math.round(100 * r.rate) + "%";
+}
+
+/* tooltip spelling out the win/loss/push record behind a win rate */
+function recordText(r) {
+  const bits = [r.plays + (r.plays === 1 ? " hand" : " hands")];
+  bits.push(r.wins + (r.wins === 1 ? " win" : " wins"));
+  bits.push(r.losses + (r.losses === 1 ? " loss" : " losses"));
+  if (r.pushes) bits.push(r.pushes + (r.pushes === 1 ? " push" : " pushes"));
+  return r.g.name + " \u00B7 " + bits.join(", ");
+}
+
+/* compact side-panel version: icon, table, net, win rate */
+function tableSummaryMini() {
+  const played = tableBreakdown().filter((r) => r.plays > 0);
+  if (!played.length) return null;
+  const MAX = 6;
+  const shown = played.slice(0, MAX);
+  const wrap = el("div", { class: "hist-mini" },
+    el("div", { class: "hmin-row hmin-head" },
+      el("span", {}),
+      el("span", { text: "Table" }),
+      el("span", { text: "Net" }),
+      el("span", { text: "Win\u00A0%" })
+    )
+  );
+  for (const r of shown) {
+    wrap.appendChild(el("div", { class: "hmin-row", title: recordText(r) + " \u00B7 net " + signed(r.net) },
+      el("span", { class: "hmin-icon", text: r.g.icon || "\u2753" }),
+      el("span", { class: "hmin-name", text: r.g.name }),
+      el("span", { class: "hmin-net " + (r.net > 0 ? "good" : r.net < 0 ? "bad" : ""), text: signed(r.net) }),
+      el("span", { class: "hmin-rate", text: rateText(r) })
+    ));
+  }
+  if (played.length > shown.length) {
+    wrap.appendChild(el("div", { class: "hmin-more" },
+      el("button", { class: "linkbtn", type: "button", text: "+" + (played.length - shown.length) + " more \u00B7 VIEW ALL", onclick: openHistoryModal })
+    ));
+  }
+  return wrap;
+}
+
+/* full version for the history modal: every table, with totals */
+function tableBreakdownTable() {
+  const rows = tableBreakdown();
+  const played = rows.filter((r) => r.plays > 0);
+  if (!played.length) return null;
+
+  const grid = (cls, ...cells) => el("div", { class: cls }, ...cells);
+  const wrap = el("div", { class: "hist-gtable" },
+    grid("hgt-head",
+      el("span", { text: "Table" }),
+      el("span", { text: "Hands" }),
+      el("span", { text: "Won" }),
+      el("span", { text: "Lost" }),
+      el("span", { text: "Net" }),
+      el("span", { text: "Win rate" })
+    )
+  );
+
+  for (const r of played) {
+    const ncls = r.net > 0 ? "good" : r.net < 0 ? "bad" : "hgt-mut";
+    wrap.appendChild(grid("hgt-row", 
+      el("span", { class: "hgt-name", text: (r.g.icon || "\u2753") + " " + r.g.name }),
+      el("span", { text: String(r.plays) }),
+      el("span", { class: "good", text: r.won ? fmt(r.won) : "\u2014" }),
+      el("span", { class: "bad", text: r.lost ? fmt(r.lost) : "\u2014" }),
+      el("span", { class: "hgt-net " + ncls }, r.net > 0 ? el("span", { class: "hgt-sign", text: "+" }) : null, fmt(Math.abs(r.net))),
+      el("span", { class: "hgt-rate", title: recordText(r), text: rateText(r) })
+    ));
+  }
+
+  const total = played.reduce((a, r) => {
+    a.plays += r.plays; a.won += r.won; a.lost += r.lost; a.net += r.net; a.wins += r.wins; a.losses += r.losses; a.pushes += r.pushes;
+    return a;
+  }, { plays: 0, won: 0, lost: 0, net: 0, wins: 0, losses: 0, pushes: 0 });
+  const totalNetCls = total.net > 0 ? "good" : total.net < 0 ? "bad" : "hgt-mut";
+  wrap.appendChild(grid("hgt-row hgt-total",
+    el("span", { class: "hgt-name", text: "All tables" }),
+    el("span", { text: String(total.plays) }),
+    el("span", { class: "good", text: total.won ? fmt(total.won) : "\u2014" }),
+    el("span", { class: "bad", text: total.lost ? fmt(total.lost) : "\u2014" }),
+    el("span", { class: "hgt-net " + totalNetCls }, total.net > 0 ? el("span", { class: "hgt-sign", text: "+" }) : null, fmt(Math.abs(total.net))),
+    el("span", { class: "hgt-rate", title: total.plays + " hands, " + total.wins + " wins, " + total.losses + " losses" + (total.pushes ? ", " + total.pushes + " pushes" : ""), text: Math.round(100 * (total.plays ? total.wins / total.plays : 0)) + "%" })
+  ));
+
+  const dark = rows.filter((r) => r.plays === 0);
+  if (dark.length) {
+    wrap.appendChild(el("div", { class: "hgt-split" },
+      el("span", { text: "Not played yet" }),
+      el("span", { text: dark.length + (dark.length === 1 ? " table" : " tables") })
+    ));
+    for (const r of dark) {
+      wrap.appendChild(grid("hgt-row hgt-idle",
+        el("span", { class: "hgt-name", text: (r.g.icon || "\u2753") + " " + r.g.name }),
+        el("span", { text: "0" }),
+        el("span", { text: "\u2014" }),
+        el("span", { text: "\u2014" }),
+        el("span", { text: "\u2014" }),
+        el("span", { text: "\u2014" })
+      ));
+    }
+  }
+
+  return wrap;
+}
+
 function renderHistoryPanel() {
   if (!historyEl) return;
-  clear(historyEl);
   const h = Array.isArray(state.history) ? state.history : [];
+  if (tableMiniEl) {
+    clear(tableMiniEl);
+    const mini = h.length ? tableSummaryMini() : null;
+    if (mini) tableMiniEl.appendChild(mini);
+    tableMiniEl.hidden = !mini;
+  }
+  clear(historyEl);
   if (!h.length) { historyEl.appendChild(histEmpty("No hands played yet.")); return; }
   for (const row of historyRows(h.slice(-14))) historyEl.appendChild(row);
 }
 
+let historyModal = null;
+
 function openHistoryModal() {
+  /* guard: re-clicking the HISTORY button (or double-tapping on touch) should not
+     stack a second identical sheet on top of the first */
+  if (historyModal) return;
   const h = Array.isArray(state.history) ? state.history : [];
+  const stats = state.stats;
   const listWrap = el("div", { class: "hist hist-full" });
   if (!h.length) listWrap.appendChild(histEmpty("You have not played a hand yet."));
   else for (const row of historyRows(h)) listWrap.appendChild(row);
 
-  let wins = 0, losses = 0, net = 0;
-  for (const e of h) {
-    const profit = (Number(e.p) || 0) - (Number(e.s) || 0);
-    net += profit;
-    if (profit > 0) wins++;
-    else if (profit < 0) losses++;
-  }
-  const pushes = h.length - wins - losses;
+  /* lifetime totals, so the headline figures agree with the per-table sheet below
+     (the hand log itself only keeps the most recent hands) */
+  const plays = Math.max(0, Math.round(Number(stats.plays) || 0));
+  const wins = Math.max(0, Math.round(Number(stats.wins) || 0));
+  const losses = Math.max(0, Math.round(Number(stats.losses) || 0));
+  const pushes = Math.max(0, plays - wins - losses);
+  const net = Math.round((Number(stats.won) || 0) - (Number(stats.lost) || 0));
 
-  modal({
+  const body = el("div", {},
+    el("div", { class: "hist-summary" },
+      el("span", {}, el("b", { text: plays.toLocaleString("en-US") }), "hands"),
+      el("span", { class: "good" }, el("b", { text: wins.toLocaleString("en-US") }), "wins"),
+      el("span", { class: "bad" }, el("b", { text: losses.toLocaleString("en-US") }), "losses"),
+      pushes ? el("span", {}, el("b", { text: pushes.toLocaleString("en-US") }), "pushes") : null,
+      el("span", { class: net >= 0 ? "good" : "bad" }, el("b", { text: signed(net) }), "net")
+    )
+  );
+
+  const table = tableBreakdownTable();
+  if (table) {
+    body.appendChild(el("div", { class: "hist-sub-head", text: "By table" }));
+    body.appendChild(table);
+    body.appendChild(el("div", { class: "hist-note", text: "Won and Lost are the gross profit and gross losses on that table \u2014 Net is the difference. Pushes count as hands but as neither a win nor a loss, so the win rate is wins \u00F7 hands." }));
+    body.appendChild(el("div", { class: "hist-sub-head", text: h.length ? "Recent hands \u00B7 last " + h.length : "Every hand" }));
+  }
+  body.appendChild(listWrap);
+
+  historyModal = modal({
     title: "Play History",
     width: 660,
-    body: el("div", {},
-      el("div", { class: "hist-summary" },
-        el("span", {}, el("b", { text: String(h.length) }), "hands"),
-        el("span", { class: "good" }, el("b", { text: String(wins) }), "wins"),
-        el("span", { class: "bad" }, el("b", { text: String(losses) }), "losses"),
-        pushes ? el("span", {}, el("b", { text: String(pushes) }), "pushes") : null,
-        el("span", { class: net >= 0 ? "good" : "bad" }, el("b", { text: (net < 0 ? "-" : "+") + fmt(Math.abs(net)) }), "net")
-      ),
-      listWrap
-    ),
+    body,
     buttons: [{ label: "CLOSE", cls: "gold" }],
+    onClose: () => { historyModal = null; },
   });
 }
 
@@ -1256,26 +1423,113 @@ const CHEAT_CODES = {
   winnerwinnerchikendinner: 1000,
   losergottoeat: 20000,
   isuckatthisgame: 100000,
+  whosyourdaddy: 100,
 };
 const cheatPanel = document.getElementById("cheatPanel");
 const cheatInput = document.getElementById("cheatInput");
 const cheatBtn = document.getElementById("cheatBtn");
 
+/* ---- admin gate ----
+   The word "admin" no longer opens the console on its own: it puts the code window
+   into password mode. Only the SHA-256 of the password lives in this file, so the
+   plaintext is not sitting in the source for anyone who opens devtools. Be honest
+   about what this is: a lock on the door, not a vault. The whole game runs in the
+   player's own browser and the save is editable by hand, so a determined cheater
+   walks around it — this just stops the password from being readable at a glance.
+   The unlock lasts for the session (it resets on reload) and wrong guesses are
+   rate-limited. To change the password: sha256 the new one and paste the hex here. */
+const ADMIN_PASS_HASH = "9f425cd422895f3948a8592dab9f3cbdb5bdfc4013b38e385c936a6129ea73c4";
+const ADMIN_MAX_TRIES = 3;
+const ADMIN_LOCKOUT_MS = 30000;
+let adminUnlocked = false;
+let adminPrompt = false;
+let adminTries = 0;
+let adminLockUntil = 0;
+
+const cheatHintEl = document.getElementById("cheatHintEl");
+
+function sha256Hex(text) {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))
+    .then((buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join(""));
+}
+function isAdminPass(code) {
+  return sha256Hex(code).then((h) => h === ADMIN_PASS_HASH).catch(() => false);
+}
+
+function cheatMode(mode) {
+  adminPrompt = mode === "pass";
+  cheatPanel.classList.toggle("asking", adminPrompt);
+  cheatPanel.classList.remove("denied");
+  cheatInput.type = adminPrompt ? "password" : "text";
+  cheatInput.placeholder = adminPrompt ? "admin password…" : "enter code…";
+  cheatHintEl.hidden = !adminPrompt;
+  cheatHintEl.textContent = adminPrompt ? "RESTRICTED \u2014 ADMIN PASSWORD REQUIRED" : "";
+  cheatInput.value = "";
+}
+
+function askAdminPass() {
+  cheatMode("pass");
+  setCheatOpen(true);
+}
+
+function unlockAdmin() {
+  adminUnlocked = true;
+  adminTries = 0;
+  cheatMode("code");
+  setCheatOpen(false);
+  toast("Admin access granted.", "gold", 2000);
+  openCheatAdmin();
+}
+
+function denyAdmin(msg) {
+  cheatPanel.classList.remove("denied");
+  void cheatPanel.offsetWidth;
+  cheatPanel.classList.add("denied");
+  toast(msg, "lose", 2400);
+}
+
+async function tryAdminPass(code) {
+  const now = Date.now();
+  if (now < adminLockUntil) {
+    denyAdmin("Locked out for another " + Math.ceil((adminLockUntil - now) / 1000) + "s.");
+    return;
+  }
+  if (await isAdminPass(code)) { unlockAdmin(); return; }
+  adminTries++;
+  const left = ADMIN_MAX_TRIES - adminTries;
+  if (left <= 0) {
+    adminTries = 0;
+    adminLockUntil = Date.now() + ADMIN_LOCKOUT_MS;
+    denyAdmin("Access denied \u2014 locked for " + ADMIN_LOCKOUT_MS / 1000 + "s.");
+    return;
+  }
+  cheatInput.value = "";
+  cheatInput.focus();
+  denyAdmin("Wrong password. " + left + " attempt" + (left === 1 ? "" : "s") + " left.");
+}
+
 function setCheatOpen(open) {
   cheatPanel.hidden = !open;
   if (open) { cheatInput.value = ""; setTimeout(() => cheatInput.focus(), 0); }
+  else cheatMode("code");
 }
 cheatBtn.addEventListener("click", () => setCheatOpen(cheatPanel.hidden));
-cheatInput.addEventListener("keydown", (e) => {
+cheatInput.addEventListener("keydown", async (e) => {
   if (e.key === "Escape") { e.stopPropagation(); setCheatOpen(false); return; }
   if (e.key !== "Enter") return;
   e.preventDefault();
   e.stopPropagation();
   const code = cheatInput.value.trim();
+  if (!code) { setCheatOpen(false); return; }
+  if (adminPrompt) { cheatInput.value = ""; tryAdminPass(code); return; }
   setCheatOpen(false);
-  if (!code) return;
   const key = code.toLowerCase();
-  if (key === "admin") { openCheatAdmin(); return; }
+  if (key === "admin") {
+    if (adminUnlocked) openCheatAdmin();
+    else askAdminPass();
+    return;
+  }
+  if (await isAdminPass(code)) { unlockAdmin(); return; }
   const reward = CHEAT_CODES[key];
   if (Number.isFinite(reward)) {
     addMoney(reward);

@@ -1,7 +1,7 @@
 import { el, clear, fmt } from "../ui.js";
 import { stageShell, clamp } from "./common.js";
 import { infoBtn, openInfo, sec, ul, note } from "./infocard.js";
-import { state, saveState } from "../state.js";
+import { state, saveState, CONFIG } from "../state.js";
 import { sfx } from "../audio.js";
 
 /* =========================================================
@@ -11,18 +11,47 @@ import { sfx } from "../audio.js";
    by a quarter-multiple every play it survives).
    ========================================================= */
 
-const COLS = 15;
-const ROWS = 11;
 const WIN_SHARE = 0.35;
 const POT_BASE = 5;
 const POT_STEP = 0.25;
 const POT_CAP = 14;
-const LIVES = 3;
-const TIME_LIMIT = 90;
-const PAC_STEP = 380;
-const GHOST_STEP = 430;
+/* Difficulty lives in main.pjs (see the "ghost muncher" block there) so the machine
+   can be retuned without touching this file; the DEV-NOTES entry records what each
+   knob is worth. The board size must stay ODD in both directions (the generator
+   carves on a two-tile lattice and the den is centred on an odd midpoint), so the
+   values are snapped rather than trusted. Board size, not speed, is what makes a maze
+   readable, so the shipped tuning is a small board with deliberately slow ghosts: the
+   pressure comes from the fright timer, the lives count and Blinky's endgame ramp
+   instead of from raw speed. Retune with the headless harness described in DEV-NOTES
+   -- the no-overlap rule below changes the difficulty of every speed setting, so
+   numbers measured before it do not carry over. */
+const COLS = Math.max(9, Math.round(CONFIG.arcadeCols) | 1);
+const ROWS = Math.max(7, Math.round(CONFIG.arcadeRows) | 1);
+const LIVES = CONFIG.arcadeLives;
+const TIME_LIMIT = CONFIG.arcadeTimeLimit;
+const PAC_STEP = CONFIG.arcadePacStepMs;
+const GHOST_STEP = CONFIG.arcadeGhostStepMs;
 const GLIDE_FRAC = 0.5;
-const FRIGHT_TIME = 6.5;
+const FRIGHT_TIME = CONFIG.arcadeFrightSec;
+const POWER_CELLS = CONFIG.arcadePowerCells;       // glowing pellets per maze
+const GHOST4_CHANCE = CONFIG.arcadeGhost4Chance;   // 1 = every maze sends all four
+const GHOST_ROUTING = CONFIG.arcadeGhostRouting;   // 0 crow-flies, 2 corridor tie-break, 1 full routing
+const FRIGHT_FLEE = CONFIG.arcadeFrightFlee;       // chance a blue ghost picks the way away from you
+const GHOST_BACKOFF = CONFIG.arcadeGhostBackoff;   // steps a boxed-in ghost waits before backing out
+// Blinky's endgame ramp -- the cabinet's "Cruise Elroy". He presses harder the emptier
+// the board gets, in three gears so it builds instead of lurching. Strongest gear first:
+// the first threshold the board has passed is the gear he is in, so a full board is the
+// only time he is at his base speed -- and even at the top of the ramp he is slower than
+// the old tuning, which is the whole point of the slower-ghost retune.
+const ELROY_PLAN = [
+  [0.9, CONFIG.arcadeElroyRush],
+  [0.75, CONFIG.arcadeElroyHard],
+  [0.55, CONFIG.arcadeElroyPace],
+];
+function elroyFor(eaten) {
+  for (const [th, mul] of ELROY_PLAN) if (eaten >= th) return mul;
+  return 1;
+}
 
 const UP = [0, -1], DOWN = [0, 1], LEFT = [-1, 0], RIGHT = [1, 0];
 const DIR_LIST = [UP, DOWN, LEFT, RIGHT];
@@ -37,9 +66,6 @@ const MODE_PLAN = [
 const PERSONAS = ["blinky", "pinky", "inky", "clyde"];
 // straight speed multipliers (bigger = covers a tile in less time); Blinky leads, Clyde dawdles
 const PERSONA_SPEED = { blinky: 1.06, pinky: 1.0, inky: 1.0, clyde: 0.92 };
-// Blinky only speeds up "Cruise Elroy" style once most of the maze is eaten
-const ELROY_AT = 0.45, ELROY_HARD_AT = 0.2;
-
 const KEYMAP = {
   ArrowUp: UP, ArrowDown: DOWN, ArrowLeft: LEFT, ArrowRight: RIGHT,
   w: UP, s: DOWN, a: LEFT, d: RIGHT,
@@ -222,6 +248,9 @@ export default {
     let lives = LIVES;
     let timeLeft = TIME_LIMIT;
     let fright = 0;
+    // BFS floods for the corridor-distance tie-break, keyed by target tile; rebuilt
+    // whenever a fresh maze is generated (a stale field would route ghosts into walls).
+    let routeCache = new Map();
     let phase = "idle"; // idle | ready | play | done
     let readyMs = 0;
     let rafId = 0;
@@ -267,6 +296,7 @@ export default {
         persona,
         corner: [tx, ty],
         spot: i,
+        blockTicks: 0,
       };
     }
     function entityPos(e) {
@@ -276,6 +306,7 @@ export default {
     function placeAt(e, tx, ty) {
       e.tx = tx; e.ty = ty; e.px = tx; e.py = ty;
       e.prog = 0; e.gliding = false; e.stepT = 0;
+      e.blockTicks = 0;
     }
 
     // Grid-locked stepping: the entity sits on a tile for the dwell portion of the
@@ -289,7 +320,9 @@ export default {
       }
       e.stepT -= dtSec * 1000;
       if (e.stepT > 0) return;
-      if (choose) choose(e);
+      // A chooser may return false to say "not this tick". A ghost that has been boxed
+      // in by its friends holds position briefly instead of stepping through them.
+      if (choose && choose(e) === false) { e.stepT = 90; return; }
       if (!e.dir[0] && !e.dir[1]) { e.stepT = 120; return; }
       if (!canWalk(maze, e.tx, e.ty, e.dir)) { e.stepT = 120; return; }
       e.px = e.tx; e.py = e.ty;
@@ -327,6 +360,10 @@ export default {
     function modeNow() { return MODE_PLAN[Math.min(modeIdx, MODE_PLAN.length - 1)][0]; }
     function resetModes() { modeIdx = 0; modeT = 0; }
     function reverseGhost(g) {
+      // A flip mid-slide re-commits the ghost to the tile it just left. If a friend is
+      // resting there the flip would drop it on top of them, so it finishes the slide
+      // instead: the direction change is a beat late, and nobody ever overlaps.
+      if (g.gliding && ghostOn(g, g.px, g.py) && !ghostOn(g, g.tx, g.ty)) return;
       if (g.gliding) {
         const ox = g.px, oy = g.py;
         g.px = g.tx; g.py = g.ty;
@@ -365,19 +402,117 @@ export default {
       return pt; // blinky just walks at you
     }
 
+    /* Ghosts never share a tile. `ghostOn` answers "is another ghost holding this
+       tile?", and a ghost that is mid-slide still counts as holding the tile it left
+       -- without that clause the ghost behind it would move in underneath it, and the
+       two would visibly overlap for the length of the slide. */
+    function ghostOn(g, x, y) {
+      for (const o of ghosts) {
+        if (o === g) continue;
+        if (o.tx === x && o.ty === y) return o;
+        if (o.gliding && o.px === x && o.py === y) return o;
+      }
+      return null;
+    }
+
+    /* Distance to the target tile measured along the corridors (a BFS flood), not
+       through the walls. Flooded once per target and cached: the target only moves
+       when pac turns or the scatter/chase mode flips, so a handful of floods covers a
+       whole maze. Missing (a wall, or unreachable) reads as 9999. */
+    function routeField(tx, ty) {
+      const cx = clamp(Math.round(tx), 0, COLS - 1), cy = clamp(Math.round(ty), 0, ROWS - 1);
+      let bx = 1, by = 1, bd = Infinity;
+      for (let y = 1; y < ROWS - 1; y++) {
+        for (let x = 1; x < COLS - 1; x++) {
+          if (maze[y][x] !== 0) continue;
+          const d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+          if (d < bd) { bd = d; bx = x; by = y; }
+        }
+      }
+      const key = bx + "," + by;
+      const hit = routeCache.get(key);
+      if (hit) return hit;
+      const dist = new Int16Array(COLS * ROWS).fill(-1);
+      const q = [by * COLS + bx];
+      dist[q[0]] = 0;
+      for (let h = 0; h < q.length; h++) {
+        const i = q[h], x = i % COLS, y = (i - x) / COLS, d = dist[i];
+        for (const dd of DIR_LIST) {
+          const nx = x + dd[0], ny = y + dd[1];
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || maze[ny][nx] !== 0) continue;
+          const j = ny * COLS + nx;
+          if (dist[j] === -1) { dist[j] = d + 1; q.push(j); }
+        }
+      }
+      if (routeCache.size > 80) routeCache.clear();
+      routeCache.set(key, dist);
+      return dist;
+    }
+
     function ghostChoose(g) {
       const rev = [-g.dir[0], -g.dir[1]];
-      const opts = CHOICE_ORDER.filter((d) => !(d[0] === rev[0] && d[1] === rev[1]) && canWalk(maze, g.tx, g.ty, d));
-      if (!opts.length) { g.dir = rev; return; }
-      if (fright > 0) { g.dir = opts[rndInt(opts.length)]; return; }
-      const tgt = ghostTarget(g);
-      let best = opts[0], bestD = Infinity;
-      for (const d of opts) {
-        const nx = g.tx + d[0], ny = g.ty + d[1];
-        const dd = (nx - tgt[0]) * (nx - tgt[0]) + (ny - tgt[1]) * (ny - tgt[1]);
-        if (dd < bestD) { bestD = dd; best = d; }
+      const noBack = (d) => !(d[0] === rev[0] && d[1] === rev[1]);
+      const open = CHOICE_ORDER.filter((d) => noBack(d) && canWalk(maze, g.tx, g.ty, d));
+
+      // An exit another ghost is holding is not an exit. On a loop maze there is
+      // always another way round, so this only ever costs a moment.
+      const free = [];
+      for (const d of open) {
+        if (!ghostOn(g, g.tx + d[0], g.ty + d[1])) free.push(d);
       }
-      g.dir = best;
+      if (!free.length) {
+        // Boxed in by friends. Wait a beat -- the one in front has a decision to make
+        // too -- then back out the way we came, which is what actually unsnarls a
+        // corridor queue instead of freezing it. Never steps through anyone.
+        g.blockTicks++;
+        const backFree = !ghostOn(g, g.tx + rev[0], g.ty + rev[1]);
+        if (backFree && g.blockTicks >= GHOST_BACKOFF) { g.dir = rev; g.blockTicks = 0; return true; }
+        return false;
+      }
+      g.blockTicks = 0;
+
+      const tgt = ghostTarget(g);
+      const field = GHOST_ROUTING ? routeField(tgt[0], tgt[1]) : null;
+      const fieldAt = (x, y) => {
+        if (!field) return 0;
+        const v = field[y * COLS + x];
+        return v < 0 ? 9999 : v;
+      };
+
+      if (fright > 0) {
+        // Blue ghosts mostly run for the far corner of the maze, but not always --
+        // a frightened ghost that never surprises you is a free pass, not a chase.
+        if (field && Math.random() < FRIGHT_FLEE) {
+          let pick = free[0], bestF = -1;
+          for (const d of free) {
+            const v = fieldAt(g.tx + d[0], g.ty + d[1]);
+            if (v > bestF) { bestF = v; pick = d; }
+          }
+          g.dir = pick;
+        } else {
+          g.dir = free[rndInt(free.length)];
+        }
+        return true;
+      }
+
+      // Straight-line distance to the target decides, exactly like the cabinet. The
+      // corridor flood only ever breaks a tie (exits within TOL of the best), so the
+      // ghosts still read as memorisable -- they just stop walking into the wall
+      // between them and you when a better-aligned corridor was one step away.
+      const TOL = GHOST_ROUTING === 1 ? Infinity : 2;
+      const scored = free.map((d) => {
+        const x = g.tx + d[0], y = g.ty + d[1];
+        return { d, gd: (x - tgt[0]) * (x - tgt[0]) + (y - tgt[1]) * (y - tgt[1]), bd: fieldAt(x, y) };
+      });
+      let bestG = Infinity;
+      for (const s of scored) if (s.gd < bestG) bestG = s.gd;
+      let pick = null;
+      for (const s of scored) {
+        if (s.gd > bestG + TOL) continue;
+        if (!pick || s.bd < pick.bd) pick = s;
+      }
+      g.dir = pick.d;
+      return true;
     }
 
     function scatterPositions(origin) {
@@ -407,11 +542,12 @@ export default {
 
     function buildLevel() {
       maze = genMaze();
+      routeCache = new Map();
       const { start, ghostSpots, openTiles } = scatterPositions();
       pac = makePac(start[0], start[1]);
       ghosts = [];
       const corners = cornerTiles(openTiles);
-      const n = 3 + (Math.random() < 0.5 ? 1 : 0);
+      const n = 3 + (Math.random() < GHOST4_CHANCE ? 1 : 0);
       for (let i = 0; i < n; i++) {
         const spot = ghostSpots[i % ghostSpots.length];
         const g = makeGhost(spot[0], spot[1], i);
@@ -423,7 +559,7 @@ export default {
       const powerSpots = openTiles
         .filter((t) => tileDistance(t, start) > 4)
         .sort(() => Math.random() - 0.5)
-        .slice(0, 3);
+        .slice(0, POWER_CELLS);
       for (const [x, y] of powerSpots) powerCells.add(x + "," + y);
       pellets = 0;
       for (const [x, y] of openTiles) {
@@ -475,9 +611,7 @@ export default {
 
       tickModes(dt);
       const eaten = 1 - pellets / Math.max(1, totalPellets);
-      let elroy = 1;
-      if (eaten >= ELROY_HARD_AT) elroy = 1.22;
-      else if (eaten >= ELROY_AT) elroy = 1.1;
+      const elroy = elroyFor(eaten);
       for (const g of ghosts) {
         const spd = g.speedMul * (g.persona === "blinky" ? elroy : 1) * (fright > 0 ? 0.62 : 1);
         stepEntity(g, ghostChoose, GHOST_STEP / spd, dt);
@@ -492,8 +626,13 @@ export default {
         const d2 = (gx - px) * (gx - px) + (gy - py) * (gy - py);
         if (d2 < 0.55) {
           if (fright > 0) {
-            const { ghostSpots } = scatterPositions([pac.tx, pac.ty]);
-            const spot = ghostSpots[g.spot % ghostSpots.length];
+            // Back to the far side of the maze -- but never onto a tile a friend is
+            // holding: the eaten ghost is the one that has to make way.
+            const { openTiles } = scatterPositions([pac.tx, pac.ty]);
+            const here = [pac.tx, pac.ty];
+            const far = openTiles.slice().sort((a, b) => tileDistance(b, here) - tileDistance(a, here));
+            let spot = far[g.spot % far.length];
+            for (const c of far) if (!ghostOn(g, c[0], c[1])) { spot = c; break; }
             placeAt(g, spot[0], spot[1]);
             g.dir = DIR_LIST[rndInt(4)];
             sfx.eatGhost();
@@ -825,7 +964,7 @@ export default {
       lastT = performance.now();
       sfx.ready();
       statusEl.className = "arcade-status";
-      statusEl.textContent = "EAT EVERY DOT \u2014 the ghosts are faster than they look";
+      statusEl.textContent = "EAT EVERY DOT \u2014 the ghosts are slow, but they cut corners";
       if (!rafId) rafId = requestAnimationFrame(loop);
       resize();
     }
@@ -868,7 +1007,7 @@ export default {
         el("div", { class: "ic-hint", text: "WHAT'S ON THE BOARD" }),
         el("div", { class: "ic-key" },
           key(pip(11, "#e8eefc"), "Pellet", "Eat every one on the board \u2014 that clears the maze."),
-          key(pip(15, "#ffe9a8", "rgba(255,225,140,.75)"), "Power pellet", "Four per maze. Makes the ghosts edible for <b>6.5s</b>."),
+          key(pip(15, "#ffe9a8", "rgba(255,225,140,.75)"), "Power pellet", POWER_CELLS + " per maze. Makes the ghosts edible for <b>" + FRIGHT_TIME + "s</b>."),
           key(pip(20, "#f2c14e"), "Muncher", "You. Never slows; the ghosts get faster as the maze empties."),
           key(ghost("#ff4d5e"), "Blinky", "Hunts you directly \u2014 the quickest of the four."),
           key(ghost("#ff8fd0"), "Pinky", "Aims ahead of you to cut off your path."),
@@ -895,6 +1034,8 @@ export default {
               "One arcade maze, generated <b>fresh every play</b> \u2014 no two boards are ever the same.",
               "Eat <b>every pellet</b> to clear it. Clear the maze and you collect <b>35% of the jackpot</b>.",
               "The ghosts hunt the whole time. Touch one and you lose a life.",
+              "The four of them <b>cannot pass through each other</b>: they queue up behind a friend and pour out of the next junction one at a time.",
+              "They are slower than you, but they know the corridors \u2014 when two ways look equally close, they take the one that actually leads to you.",
             ])
           ),
           sec("Lives and time",
