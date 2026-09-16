@@ -78,6 +78,9 @@ const app = {
   floatAtElement,
   fmt,
   refreshBet() { if (betInput) setBet(currentBet()); },
+  /* a machine's own "play again" button can start a fresh round on the same
+     table without the player hunting for the side panel's PLAY button */
+  playAgain() { return playRound(false); },
 };
 
 /* =========================================================
@@ -329,7 +332,9 @@ function buildNav() {
     crash: "house edge 3% \u00B7 no idle",
     arcade: "beat it \u00B7 take 35% \u00B7 no idle",
     frogger: "timing \u00B7 +0.05 a lane \u00B7 no idle",
+    memory: "repeat the flash \u00B7 no idle",
     chest: "3 of 9 chests pay",
+    revolver: "double or nothing · the drum gets heavier · no idle",
   };
   for (const g of GAMES) {
     const btn = el("button", {

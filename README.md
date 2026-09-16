@@ -52,7 +52,9 @@ The project currently includes:
 - 🚀 **Rocket Crash**
 - 👻 **Ghost Muncher**
 - 🐸 **Frogger Gamble**
+- 🧠 **Neon Recall**
 - 💰 **Treasure Chest**
+- 🔫 **Russian Roulette**
 
 More games may be added in the future.
 

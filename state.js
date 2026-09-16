@@ -21,6 +21,14 @@ export const CONFIG = {
   idleDefaultBet: cfg("idleDefaultBet", 10),
   idleXpMult: cfg("idleXpMult", 3),
   froggerBlockSec: cfg("froggerBlockSec", 1.8),
+  // colour-memory ("Neon Recall") tunables -- see main.pjs for what they do
+  memStartLen: cfg("memStartLen", 3),
+  memMaxLen: cfg("memMaxLen", 20),
+  memSeqStep: cfg("memSeqStep", 1.26),
+  memRandStep: cfg("memRandStep", 1.33),
+  memFlashMs: cfg("memFlashMs", 430),
+  memGapMs: cfg("memGapMs", 170),
+  memMinFlashMs: cfg("memMinFlashMs", 180),
   xpBase: cfg("xpBase", 100),
   xpExp: cfg("xpExp", 1.3),
   xpTierSize: cfg("xpTierSize", 10),
@@ -40,6 +48,12 @@ export const CONFIG = {
   // rouletteMaxBetBase * level^rouletteMaxBetExp, so your limit widens as you level.
   rouletteMaxBetBase: cfg("rouletteMaxBetBase", 400),
   rouletteMaxBetExp: cfg("rouletteMaxBetExp", 1.35),
+  // russian roulette -- see main.pjs for what each of these does
+  rrChambers: cfg("rrChambers", 6),
+  rrLiveStart: cfg("rrLiveStart", 1),
+  rrLiveMax: cfg("rrLiveMax", 5),
+  rrDouble: cfg("rrDouble", 2),
+  rrRake: cfg("rrRake", 0),
 };
 
 const SAVE_KEY = "casino-royale.save.v1";
@@ -55,6 +69,8 @@ function newRun() {
     history: [],
     arcade: { pot: 5 },
     frogger: { bestDepth: 0, bestMult: 1 },
+    memory: { bestLen: 0, bestMult: 1 },
+    revolver: { bestMult: 1, runs: 0, busts: 0 },
     stats: {
       plays: 0,
       wagered: 0,
@@ -114,6 +130,8 @@ export function loadState() {
     state.history = Array.isArray(data.history) ? data.history.slice(-HISTORY_MAX) : [];
     state.arcade = Object.assign({ pot: 5 }, data.arcade || {});
     state.frogger = Object.assign({ bestDepth: 0, bestMult: 1 }, data.frogger || {});
+    state.memory = Object.assign({ bestLen: 0, bestMult: 1 }, data.memory || {});
+    state.revolver = Object.assign({ bestMult: 1, runs: 0, busts: 0 }, data.revolver || {});
     if (!state.stats.byGame || typeof state.stats.byGame !== "object") state.stats.byGame = {};
     if (!Number.isFinite(state.money)) state.money = CONFIG.startingMoney;
     state.money = Math.round(state.money);
