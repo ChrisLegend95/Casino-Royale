@@ -54,6 +54,25 @@ export default {
 - `destroy()` must remove any `window` listeners and resolve any pending promise.
 - Betting is always `stake × lines`; the shell charges the stake before calling `play`.
 
+## Where the PLAY button lives
+
+The shell owns exactly **one** `.playbtn` (built in `buildBetPanel()`), and `placePlayButton()` in
+`src/main.js` decides which container holds it:
+
+- **≥901px:** reparented into `.playbar` — a bar that is the last flex child of `#stage`, so it
+  pins along the bottom of the game area, spanning it, with the button centred (`max-width:460px`).
+  It therefore reads as the game's own last row, directly under the machine's buttons (SPIN/CASH
+  OUT, mode switches, etc.) instead of sitting off in the right-hand column. `#stage` is a flex
+  column and `.stage-inner` above it keeps `overflow:auto`, so a machine that needs the height
+  scrolls rather than being squashed.
+- **≤900px:** back inside `#betPanel`, inserted between the chips and the payout note (where the
+  stake controls are). `.playbar` is hidden there by the responsive block — the media-query
+  `change` listener reparents the real element, it does not duplicate it.
+
+It is always the same element, so every `playBtn.disabled = ...` / `playBtn.textContent = ...`
+written by a machine (and by the round lifecycle) keeps working across a resize. `mountGame()`
+re-appends `playBar` after `clear(topbar.stage)`, since clearing the stage detaches it.
+
 ## History & per-table statistics
 
 `state.history` is the rolling hand log (capped at `HISTORY_MAX` = 150) and drives the *recent hands*
@@ -448,26 +467,41 @@ machine testing deterministic:
   pattern uses, so **the difficulty curve is the flash timing** — how long each colour stays lit and
   how long the gap between them is. Everything tunable lives in main.pjs (`mem*` → `CONFIG`).
 
-  **The two modes open at different lengths.** SEQUENCE opens at `memStartLen` (3 colours); RANDOM
-  opens at `memRandStartLen` (5), because a freshly re-rolled three-colour pattern is no test at
-  all. Both grow a colour a pass up to `memMaxLen` — the hard limit of **20 colours**, where the run
-  cashes out by itself. The consequence to watch out for: the modes do **not** have the same number
-  of passes to the ceiling (18 vs 16 with the shipped numbers), so nothing may assume one `startLen`
-  or one `maxPass`. `startFor(mode)` and `maxPassFor(mode)` are the only accessors, the pip track is
-  **rebuilt in `setMode()`** (the mode is locked mid-run, so there is never a live run to
-  invalidate), and the info card's ladder is keyed by **colour count, not pass** — with the 3-colour
-  row printing a dash in the RANDOM column. A pass-keyed table would sit SEQUENCE's 3-colour first
-  pattern next to RANDOM's 5-colour one and quietly lie about the payouts; the ladder's bar is also
-  log-scaled now, because the bank spans ~x96 and a linear bar left every early rung as a stub.
+  **The ladder is `memLevels` (27) LEVELS, one colour each** — a difficulty ladder, not a
+  length-ceiling race. SEQUENCE opens at `memStartLen` (3 colours) and tops out at 3 + 26 = **29**;
+  RANDOM opens at `memRandStartLen` (5), because a freshly re-rolled three-colour pattern is no test
+  at all, and tops out at 5 + 26 = **31**. Because the two modes now have *different* maxima, the
+  single module-level `maxLen` is gone: `startFor(mode)` and `maxLenFor(mode)` are the only
+  accessors. Both modes run exactly `levels` passes and the pip track shows `levels` pips in both,
+  so nothing may assume the old per-mode pass counts. `setMode()` rebuilds the pip track (the mode is
+  locked mid-run, so there is never a live run to invalidate), and the info card's ladder is keyed by
+  **colour count, not pass** — with the 3-colour row printing a dash in the RANDOM column. A
+  pass-keyed table would sit SEQUENCE's 3-colour first pattern next to RANDOM's 5-colour one and
+  quietly lie about the payouts; the ladder's bar is log-scaled, because the bank spans x6,965
+  (SEQUENCE) / x26,351 (RANDOM) and a linear bar left every early rung as a stub.
 
-  **Faster as it grows.** `flashFor(n)`/`gapFor(n)` = base × decay^(n − the mode's opening length),
-  floored at `memMinFlashMs`/`memMinGapMs`, and the ramp is **frozen at `memMaxLen` colours** so the
-  20th colour is the fastest the machine ever flashes. Shipped: flash 330 ms × `memFlashDecay` 0.92
-  per colour, gap 130 ms × `memGapDecay` 0.94, floors 110/55 ms (so the floors bite around 16
-  colours). Measured live by timing the pads: RANDOM pass 1 (5 colours) cycles every 483 ms and is
-  down to 327 ms by pass 6 (10 colours); SEQUENCE pass 1 (3 colours) cycles 485 ms, pass 2 (4) 439
-  ms. Raising the decay toward 1 (or deleting the cap) is what makes long patterns unlearnable
-  rather than merely hard, so retune the floors before the decay.
+  **Every level pays a bit more than the level before.** Pass 1 banks x1.26 (SEQUENCE) / x1.33
+  (RANDOM) — the old flat step — but the step then **grows by `memStepGrow` (0.01) per level**, so
+  level 27 pays x1.52 / x1.59. The bank is the **product** of the steps, not the sum, so it
+  accelerates rather than creeping: SEQUENCE x5.94 by level 7 and **x6,965.27 at the summit**, RANDOM
+  x8.60 by level 7 and **x26,351.05**. `stepOf`/`stepAt`/`multOf` build and memoise the product
+  ladder; never re-derive the bank by adding steps. Want a gentler widening? `memStepGrow` is the
+  dial (0 makes it the old flat 1.26-per-pass ladder again).
+
+  **Faster as it grows, up to a point.** `flashFor(n)`/`gapFor(n)` = base × decay^(n − the mode's
+  opening length), floored at `memMinFlashMs`/`memMinGapMs`, and the ramp is **frozen at
+  `memMaxLen` (20) colours**. That 20 is now purely a *speed* cap: both floors (110 ms flash / 55 ms
+  gap) are already reached around 17 colours, so nothing flashes faster past 20 — the pattern just
+  keeps getting longer. Shipped: flash 330 ms × `memFlashDecay` 0.92 per colour, gap 130 ms ×
+  `memGapDecay` 0.94. Measured live by timing the pads: RANDOM pass 1 (5 colours) cycles every 483
+  ms and is down to 327 ms by pass 6 (10 colours); SEQUENCE pass 1 (3 colours) cycles 485 ms, pass 2
+  (4) 439 ms. Raising the decay toward 1 is what makes long patterns unlearnable rather than merely
+  hard, so retune the floors before the decay.
+
+  **Degenerate-RNG guard in `randomSeq()`.** RANDOM refuses to emit the same pad three times running,
+  which it enforces by re-rolling; a stub `Math.random` that never varies (e.g. `() => 0` in a test)
+  used to spin that loop forever and freeze the whole preview. It now gives up after 64 refusals and
+  accepts the repeat, so a pathological `Math.random` costs a few ms instead of hanging the page.
 
   **Verifying it without ears or eyes.** A `MutationObserver` on `.mem-pad` class changes gives the
   exact lit order *and* the dwell times; replay that order with `KeyboardEvent("keydown", {key:"1"…

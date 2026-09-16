@@ -284,6 +284,12 @@ body{
 }
 .playbtn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 12px 34px rgba(242,193,78,.45)}
 .playbtn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.playbar{
+  flex:0 0 auto;display:flex;justify-content:center;align-items:center;
+  padding:8px 16px 10px;border-top:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(9,14,25,0),rgba(9,14,25,.8));
+}
+.playbar .playbtn{max-width:460px;padding:10px;font-size:25px}
 .payout-note{
   font-size:11px;color:var(--muted);line-height:1.55;
   background:#0b1120;border:1px solid var(--line);border-radius:11px;padding:10px;
@@ -1278,6 +1284,7 @@ body{
   .machine-name{font-size:10.5px}
   #stage{grid-area:stage;min-height:440px}
   #betPanel{grid-area:bet}
+  .playbar{display:none}
   .chips{grid-template-columns:repeat(3,1fr)}
   .toast{font-size:11.5px}
 }

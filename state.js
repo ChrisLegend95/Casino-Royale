@@ -75,9 +75,11 @@ export const CONFIG = {
   // colour-memory ("Neon Recall") tunables -- see main.pjs for what they do
   memStartLen: cfg("memStartLen", 3),
   memRandStartLen: cfg("memRandStartLen", 5),
+  memLevels: cfg("memLevels", 27),
   memMaxLen: cfg("memMaxLen", 20),
   memSeqStep: cfg("memSeqStep", 1.26),
   memRandStep: cfg("memRandStep", 1.33),
+  memStepGrow: cfg("memStepGrow", 0.01),
   memFlashMs: cfg("memFlashMs", 330),
   memGapMs: cfg("memGapMs", 130),
   memFlashDecay: cfg("memFlashDecay", 0.92),

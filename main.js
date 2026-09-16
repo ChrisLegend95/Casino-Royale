@@ -376,6 +376,8 @@ function mountGame(id) {
     return;
   }
   topbar.stage.appendChild(inst.root);
+  topbar.stage.appendChild(playBar);
+  placePlayButton();
   if (playBtn) {
     playBtn.textContent = inst.actionLabel || game.action;
   }
@@ -389,6 +391,27 @@ function mountGame(id) {
    bet panel
    ========================================================= */
 let betInput, playBtn, noteEl, statsEl, betTotalEl, historyEl, tableMiniEl;
+
+/* ---- where the PLAY button lives ----
+   Wide screens: a bar pinned along the bottom of the stage, centred under the game, so
+   it sits next to the machine's own buttons instead of off in the right-hand column.
+   Narrow screens: back inside the bet panel, under the chips, where the stake controls
+   are (the stage's game buttons are the only thing above it there).
+   It is always the SAME element, reparented on the media query, so machines keep
+   disabling/labelling `playBtn` by reference. */
+const playBar = el("div", { class: "playbar", hidden: true });
+const wideLayout = window.matchMedia("(min-width:901px)");
+function placePlayButton() {
+  if (!playBtn) return;
+  if (wideLayout.matches) {
+    if (playBtn.parentNode !== playBar) playBar.appendChild(playBtn);
+    playBar.hidden = false;
+  } else {
+    if (playBtn.parentNode !== topbar.betPanel) topbar.betPanel.insertBefore(playBtn, noteEl);
+    playBar.hidden = true;
+  }
+}
+wideLayout.addEventListener("change", placePlayButton);
 
 function buildBetPanel() {
   clear(topbar.betPanel);
@@ -419,7 +442,6 @@ function buildBetPanel() {
   topbar.betPanel.appendChild(el("div", { class: "chips" },
     ...chips.map(([label, fn]) => el("button", { class: "chip", type: "button", text: label, onclick: fn }))
   ));
-  topbar.betPanel.appendChild(playBtn);
   topbar.betPanel.appendChild(noteEl);
   topbar.betPanel.appendChild(el("div", { class: "panel-head", text: "Session" }));
   topbar.betPanel.appendChild(statsEl);
