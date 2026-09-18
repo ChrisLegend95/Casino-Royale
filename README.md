@@ -150,3 +150,15 @@ Feel the excitement.
 Keep your money.**
 
 🎰 **Have fun. Gamble with pixels.**
+
+---
+
+## 🛠️ For developers
+
+The economics of every machine, the save/version rules, the harnesses used to measure them and the
+machine-by-machine notes live in [`DEV-NOTES.md`](DEV-NOTES.md) — start there before retuning any
+number. The one-line summary: every chance machine must return **under 100%** even with every perk and
+luck bonus maxed, no single round may pay more than `maxWinMult` (1000×) the stake, and **no machine
+may have a farmable outcome** — an easy, repeatable result worth more than the stake. The two ladders
+(Frogger and Neon Recall) are *fitted* to a measured reference player (see "Frogger balance & the god
+harness" and the Neon Recall note) rather than guessed, so their low rungs are a push, not free money.

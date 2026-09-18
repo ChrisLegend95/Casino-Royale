@@ -69,6 +69,10 @@ const app = {
   get cheat() { return !!state.cheatWin; },
   get money() { return state.money; },
   get bet() { return currentBet(); },
+  /* the live house economy, so a machine can quote the same numbers the bet
+     panel does without re-deriving them (Fortune changes the limit) */
+  tableLimit: () => tableLimit(),
+  houseMaxMult: () => CONFIG.maxWinMult,
   canAfford,
   spend(n) {
     if (n > 0 && canAfford(n)) {
@@ -104,11 +108,20 @@ function lineBetCost(stake) {
   return round2(stake * betUnits());
 }
 
-/* a machine may cap the total bet by level (a table limit). No hook = no limit. */
+/* The house table limit: the most you may stake on one round of ANY machine.
+   It grows with your level and Fortune stretches it further; a machine may still
+   override it with its own maxBet(), but nothing ships without a limit any more.
+   The limit caps a round's LOSS as much as its win, so one bad hand can never
+   take the whole bankroll. */
 function tableLimit() {
-  if (typeof game.maxBet !== "function") return Infinity;
-  const v = Number(game.maxBet(state.level));
-  return Number.isFinite(v) && v > 0 ? Math.floor(v) : Infinity;
+  let lim = CONFIG.tableLimitBase * Math.pow(Math.max(1, state.level), CONFIG.tableLimitExp);
+  if (typeof game.maxBet === "function") {
+    const v = Number(game.maxBet(state.level));
+    if (Number.isFinite(v) && v > 0) lim = v;
+  }
+  lim *= computeEffects().limitMult;
+  if (!Number.isFinite(lim) || lim <= 0) return Infinity;
+  return Math.max(1, Math.floor(lim));
 }
 
 function betCap() {
@@ -126,15 +139,22 @@ function moneyLabel() {
   return state.infMoney ? "\u221E" : fmt(state.money);
 }
 
-function applyPerks(stake, rawMult, eff) {
+/* Perks pay a small, STAKE-BOUNDED bonus on top of whatever the game returned:
+   Fat Stacks adds winBonus of the stake on a winning round, Safety Net refunds
+   rebate of the stake on a losing one. Both are flat and tiny by construction, so
+   a jackpot cannot snowball them and no machine can be pushed past 100% by them
+   (see the balance book in main.pjs). `usePerks` is false at tables that opt out
+   -- the House's blackjack, where the edge is already razor thin. */
+function applyPerks(stake, rawMult, eff, usePerks = true) {
   const base = stake * rawMult;
   const profit = base - stake;
+  if (!usePerks) return { payout: roundMoney(base), profit: roundMoney(profit) };
   if (profit > 0) {
-    const bonus = profit * (eff.winMult - 1);
+    const bonus = stake * eff.winBonus;
     return { payout: roundMoney(base + bonus), profit: roundMoney(profit + bonus) };
   }
   if (profit < 0) {
-    const refund = -profit * eff.rebate;
+    const refund = stake * eff.rebate;
     return { payout: roundMoney(base + refund), profit: roundMoney(profit + refund) };
   }
   return { payout: roundMoney(base), profit: 0 };
@@ -202,12 +222,26 @@ async function playRound(instant = false, opts = {}) {
   if (state.cheatWin && (Number(res.multiplier) || 0) < 1.02) {
     res = Object.assign({}, res, { multiplier: 1.02 + Math.random() * 0.48, rescued: true });
   }
-  const { payout, profit } = applyPerks(roundStake, Number(res.multiplier) || 0, eff);
+  /* HOUSE MAXIMUM: no round pays more than maxWinMult x the stake, whatever the
+     machine, its luck or its perks produced. Every advertised top sits under it;
+     it only bites on Rocket Crash's free-flown multiplier; every other machine's own
+     ladder/odds cap sits under it, and Neon Recall advertises that tighter top. */
+  const rawMult = Math.max(0, Number(res.multiplier) || 0);
+  const mult = Math.min(CONFIG.maxWinMult, rawMult);
+  res = Object.assign({}, res, { multiplier: mult, capped: rawMult > mult });
+  const { payout, profit } = applyPerks(roundStake, mult, eff, !game.noPerks);
   if (payout > 0) addMoney(payout);
-  recordPlay({ game: gameId, stake: roundStake, payout, multiplier: Number(res.multiplier) || 0 });
+  recordPlay({ game: gameId, stake: roundStake, payout, multiplier: mult });
   renderHistoryPanel();
 
-  const xpGain = roundStake * CONFIG.xpRate * eff.xpMult * (opts.idle ? CONFIG.idleXpMult : 1);
+  /* XP is a comp on money actually risked. A round that returned exactly the
+     stake -- a bank on the verge at x1.00, a push, a cash-out before the first
+     shot -- earns nothing (otherwise "start a round, immediately bank at x1.00,
+     repeat" is a risk-free level-and-money printer), and a table whose edge is
+     thinner than the comp (blackjack) opts out with `noXp`. */
+  const xpGain = (profit === 0 || game.noXp)
+    ? 0
+    : roundStake * CONFIG.xpRate * eff.xpMult * (opts.idle ? CONFIG.idleXpMult : 1);
   const levels = grantXp(xpGain);
 
   playing = false;
@@ -216,22 +250,23 @@ async function playRound(instant = false, opts = {}) {
 
   if (!instant) {
     if (payout > 0 && profit > 0) {
-      const mult = Number(res.multiplier) || 0;
+      const mm = mult;
       let tier = 1;
-      if (profit >= 100 || mult >= 3) tier = 2;
-      if (profit >= 750 || mult >= 12) tier = 3;
-      if (profit >= 4000 || mult >= 40) tier = 4;
+      if (profit >= 100 || mm >= 3) tier = 2;
+      if (profit >= 750 || mm >= 12) tier = 3;
+      if (profit >= 4000 || mm >= 40) tier = 4;
       sfx.win(tier);
       sfx.cash(tier);
     } else if (payout === 0) {
       sfx.lose();
     }
+    if (res.capped) toast("House maximum \u2014 paid at \u00D7" + mult.toFixed(2) + ".", "gold", 2600);
   }
 
   if (!instant && profit > 0 && (!opts.idle || profit >= 50)) {
     winPopup({
       amount: profit,
-      mult: Number(res.multiplier) || 0,
+      mult,
       label: opts.idle ? "IDLE WIN" : "YOU WIN",
     });
   }
@@ -244,14 +279,14 @@ async function playRound(instant = false, opts = {}) {
     const reward = levels.reduce((a, l) => a + l.reward, 0);
     if (milestone) {
       toast("MILESTONE \u2014 LEVEL " + state.level + "!  +" + fmt(reward) +
-        " and more luck. XP per level just got " + Math.max(1, CONFIG.xpTierSpike).toFixed(2).replace(/\.?0+$/, "") + "\u00D7 harder.", "gold", 4200);
+        " and a wider table limit. XP per level just got " + Math.max(1, CONFIG.xpTierSpike).toFixed(2).replace(/\.?0+$/, "") + "\u00D7 harder.", "gold", 4200);
     } else {
-      toast("LEVEL " + state.level + "!  +" + fmt(reward) + " and more luck.", "gold", 3200);
+      toast("LEVEL " + state.level + "!  +" + fmt(reward) + " and a wider table limit.", "gold", 3200);
     }
     sfx.levelUp();
     confetti(45);
   } else if (!instant && profit > 0 && (roundStake >= 50 || profit >= 200)) {
-    if (profit >= 500 || (res.multiplier || 0) >= 8) confetti(40);
+    if (profit >= 500 || mult >= 8) confetti(40);
   }
 
   saveState();
@@ -330,16 +365,16 @@ function buildNav() {
   clear(topbar.nav);
   topbar.nav.appendChild(el("div", { class: "nav-head", text: "The Floor" }));
   const edges = {
-    slots: "house edge 10%",
-    "slots-multi": "house edge 7%",
+    slots: "return 95.7% \u00B7 max 200x",
+    "slots-multi": "return 93% \u00B7 max 1000x",
     roulette: "house edge 2.7%",
-    blackjack: "house edge 0.5%",
+    blackjack: "house edge 0.5% \u00B7 no perks",
     horse: "house edge 8%",
-    crash: "house edge 3% \u00B7 no idle",
-    arcade: "beat it \u00B7 take 35% \u00B7 no idle",
-    frogger: "timing \u00B7 +0.05 a lane \u00B7 no idle",
-    memory: "repeat the flash \u00B7 no idle",
-    chest: "3 of 9 chests pay",
+    crash: "house edge 3% \u00B7 max 1000x \u00B7 no idle",
+    arcade: "beat it \u00B7 take " + Math.round(CONFIG.arcadeWinShare * 100) + "% \u00B7 no idle",
+    frogger: "timing \u00B7 10 islands \u00B7 no idle",
+    memory: "fitted ladder \u00B7 table max \u00B7 no idle",
+    chest: "house edge 6.3% \u00B7 4 of 9 pay",
     revolver: "10 rungs \u00B7 house edge 8.3% \u00B7 no idle",
   };
   for (const g of GAMES) {
@@ -485,10 +520,16 @@ function renderBetTotal() {
   const per = currentBet();
   const bits = [];
   if (units > 1) {
-    bits.push("<b>" + units + " lines</b> \u00D7 " + fmt(per) + " per line = <b>" + fmt(lineBetCost(per)) + "</b> total per spin");
+    const label = (game && game.unitLabel) || (inst && inst.unitLabel) || "lines";
+    bits.push("<b>" + units + " " + label + "</b> \u00D7 " + fmt(per) + " each = <b>" + fmt(lineBetCost(per)) + "</b> total per spin");
   }
   const lim = tableLimit();
   if (Number.isFinite(lim)) bits.push("table limit <b>" + fmt(lim) + "</b>");
+  /* Each machine may declare its own ceiling (maxWinMult on the descriptor); the house-wide
+     CONFIG.maxWinMult is the fallback, and it is a TRUE upper bound for every machine, so the
+     line is never a lie -- just tighter for a machine that cannot reach the house clamp. */
+  const winMult = (game && Number(game.maxWinMult) > 0) ? game.maxWinMult : CONFIG.maxWinMult;
+  bits.push("max win <b>" + fmt(winMult * Math.max(1, lineBetCost(per))) + "</b>");
   if (!bits.length) {
     betTotalEl.hidden = true;
   } else {
@@ -753,9 +794,11 @@ function renderPayoutNote() {
   if (!noteEl) return;
   const eff = computeEffects();
   const extras = [];
-  if (eff.winMult > 1) extras.push("+" + ((eff.winMult - 1) * 100).toFixed(0) + "% on winnings");
-  if (eff.rebate > 0) extras.push((eff.rebate * 100).toFixed(0) + "% loss rebate");
+  if (eff.winBonus > 0) extras.push("+" + (eff.winBonus * 100).toFixed(1) + "% of stake on a win");
+  if (eff.rebate > 0) extras.push((eff.rebate * 100).toFixed(1) + "% of stake back on a loss");
   if (eff.luck > 0) extras.push("+" + (eff.luck * 100).toFixed(1) + "% luck");
+  if (eff.limitMult > 1) extras.push("table limits \u00D7" + eff.limitMult.toFixed(2));
+  if (game.noPerks) extras.push("perks & luck do not apply at this table");
   clear(noteEl);
   noteEl.appendChild(el("div", { html: typeof game.payoutNote === "function" ? game.payoutNote() : "" }));
   if (extras.length) {
@@ -1226,7 +1269,8 @@ function openPerkShop() {
 
   const body = el("div", {}, banner, el("p", { class: "shop-note", html:
     "Perks are permanent for the run and <b>stack</b> on every purchase. Most cap at 5 stacks. " +
-    "<b>Fortune</b> never caps \u2014 each stack adds +1% to every win and the price climbs each time. " +
+    "The money perks are deliberately small and pay on your <b>stake</b>, never on the payout \u2014 they nudge your odds and widen your limits, they are not an income. " +
+    "<b>Fortune</b> never caps: each stack lifts every table's maximum bet by " + (CONFIG.limitStack * 100).toFixed(0) + "%, and the price climbs each time. " +
     "<b>MAX ALL PERKS</b> instantly maxes every capped perk, but leaves endless Fortune alone."
   }), grid);
 
@@ -1235,8 +1279,9 @@ function openPerkShop() {
     clear(banner);
     banner.appendChild(el("div", { class: "statline" },
       el("div", { class: "item" }, el("b", { text: moneyLabel() }), "balance"),
-      el("div", { class: "item" }, el("b", { text: ((eff.winMult - 1) * 100).toFixed(0) + "%" }), "win bonus"),
-      el("div", { class: "item" }, el("b", { text: (eff.rebate * 100).toFixed(0) + "%" }), "loss rebate"),
+      el("div", { class: "item" }, el("b", { text: "+" + (eff.winBonus * 100).toFixed(1) + "%" }), "win bonus"),
+      el("div", { class: "item" }, el("b", { text: (eff.rebate * 100).toFixed(1) + "%" }), "loss rebate"),
+      el("div", { class: "item" }, el("b", { text: "\u00D7" + eff.limitMult.toFixed(2) }), "table limits"),
       el("div", { class: "item" }, el("b", { text: "+" + (eff.luck * 100).toFixed(1) + "%" }), "luck"),
       el("div", { class: "item" }, el("b", { text: "+" + ((eff.xpMult - 1) * 100).toFixed(0) + "%" }), "xp"),
       el("div", { class: "item" }, el("b", { text: "+" + ((eff.idleSpeed - 1) * 100).toFixed(0) + "%" }), "idle speed")

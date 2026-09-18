@@ -45,7 +45,8 @@ export const CONFIG = {
   loanPerLevel: cfg("loanPerLevel", 250),
   idleDefaultBet: cfg("idleDefaultBet", 10),
   idleXpMult: cfg("idleXpMult", 3),
-  froggerBlockSec: cfg("froggerBlockSec", 1.8),
+  froggerBlockSec: cfg("froggerBlockSec", 0.34),
+  froggerRestSec: cfg("froggerRestSec", 3.0),
 
   // Save generation -- see the comment on `saveVersion` in main.pjs. A stored save
   // is only accepted when its `v` equals this, so bumping the knob in main.pjs
@@ -78,14 +79,30 @@ export const CONFIG = {
   arcadeElroyPace: cfg("arcadeElroyPace", 1.1),
   arcadeElroyHard: cfg("arcadeElroyHard", 1.22),
   arcadeElroyRush: cfg("arcadeElroyRush", 1.35),
+  // the maze pot: a clear pays arcadeWinShare of it, it resets to arcadePotBase and
+  // climbs arcadePotStep per maze it survives. Tuned so even a perfect player returns
+  // under 100% (0.35 * 2.8 = 0.98) while the reference bot's return is unchanged.
+  arcadeWinShare: cfg("arcadeWinShare", 0.35),
+  arcadePotBase: cfg("arcadePotBase", 2.8),
+  arcadePotStep: cfg("arcadePotStep", 2.1),
+  arcadePotCap: cfg("arcadePotCap", 14),
   // colour-memory ("Neon Recall") tunables -- see main.pjs for what they do
   memStartLen: cfg("memStartLen", 3),
   memRandStartLen: cfg("memRandStartLen", 5),
-  memLevels: cfg("memLevels", 27),
+  memLevels: cfg("memLevels", 19),
   memMaxLen: cfg("memMaxLen", 20),
-  memSeqStep: cfg("memSeqStep", 1.26),
-  memRandStep: cfg("memRandStep", 1.33),
-  memStepGrow: cfg("memStepGrow", 0.01),
+  // the fitted ladder: a rung pays memLadderRtp / the reference player's chance of
+  // clearing that many colours (perfect to memSkillKnee, then memSkillDecay per
+  // colour -- memSkillDecayRand in RANDOM). Caps are the machine's own ceiling.
+  memSkillKnee: cfg("memSkillKnee", 8),
+  memLadderRtp: cfg("memLadderRtp", 0.95),
+  memSkillDecay: cfg("memSkillDecay", 0.88),
+  memSkillDecayRand: cfg("memSkillDecayRand", 0.85),
+  memLadderCap: cfg("memLadderCap", 8),
+  memLadderCapRand: cfg("memLadderCapRand", 12),
+  // the machine's table maximum (it overrides the house level limit): see main.js
+  memTableBase: cfg("memTableBase", 100),
+  memTableMax: cfg("memTableMax", 2000),
   memFlashMs: cfg("memFlashMs", 330),
   memGapMs: cfg("memGapMs", 130),
   memFlashDecay: cfg("memFlashDecay", 0.92),
@@ -97,20 +114,29 @@ export const CONFIG = {
   xpTierSize: cfg("xpTierSize", 10),
   xpTierSpike: cfg("xpTierSpike", 2),
   xpRate: cfg("xpRate", 0.1),
-  levelLuck: cfg("levelLuck", 0.002),
-  levelReward: cfg("levelReward", 50),
+  levelReward: cfg("levelReward", 10),
+  // ---- balance book (see main.pjs) ----
+  // Luck is a per-round odds nudge, hard-capped at luckCap and tuned per machine
+  // so no game is ever pushed past 100% by it. Perk payouts are stake-bounded and
+  // tiny by design; Fortune lifts the table limits instead of the payouts.
+  levelLuck: cfg("levelLuck", 0.0006),
+  luckCoin: cfg("luckCoin", 0.004),
+  luckCap: cfg("luckCap", 0.08),
+  winBonusStack: cfg("winBonusStack", 0.002),
+  rebateStack: cfg("rebateStack", 0.001),
+  limitStack: cfg("limitStack", 0.05),
+  tableLimitBase: cfg("tableLimitBase", 400),
+  tableLimitExp: cfg("tableLimitExp", 1.35),
+  maxWinMult: cfg("maxWinMult", 1000),
   // treasure chest payouts (four of the nine chests pay, one more is a Lucky
   // Star that grants a second pick). The star's re-pick is worth the average
-  // chest, so the table returns (high + gem + mid + low) * (9/8) / 9.
-  // Defaults (10 + 3 + 2 + 1) average 2x (200% RTP).
-  chestHigh: cfg("chestHigh", 10),
-  chestGem: cfg("chestGem", 3),
-  chestMid: cfg("chestMid", 2),
-  chestLow: cfg("chestLow", 1),
-  // roulette table limit: the most you may stake on one spin is
-  // rouletteMaxBetBase * level^rouletteMaxBetExp, so your limit widens as you level.
-  rouletteMaxBetBase: cfg("rouletteMaxBetBase", 400),
-  rouletteMaxBetExp: cfg("rouletteMaxBetExp", 1.35),
+  // chest, so the table returns (high + gem + mid + low) / 8.
+  // Defaults (4 + 2 + 1 + 0.5) return 93.75%, a real house edge. The four
+  // prizes MUST sum to less than 8 or this machine is a money printer.
+  chestHigh: cfg("chestHigh", 4),
+  chestGem: cfg("chestGem", 2),
+  chestMid: cfg("chestMid", 1),
+  chestLow: cfg("chestLow", 0.5),
   // russian roulette -- see main.pjs for what each of these does
   rrChambers: cfg("rrChambers", 6),
   rrRake: cfg("rrRake", 0),

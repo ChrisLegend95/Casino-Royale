@@ -47,8 +47,9 @@ export default {
 ```
 
 - `play(stake, opts)` must resolve to `{ multiplier }`. `multiplier` is on the **stake**, so the
-  shell turns it into `payout = stake * multiplier * perks`. Return `multiplier: 0` for a loss and
-  `{ multiplier: 1, cancelled: true }` if `destroy()` interrupted the round.
+  shell turns it into `payout = stake * multiplier` (clamped to `maxWinMult`, then `applyPerks()`
+  adds the flat stake-bounded perk bonus — never a multiplier on the payout). Return `multiplier: 0`
+  for a loss and `{ multiplier: 1, cancelled: true }` if `destroy()` interrupted the round.
 - `play` must also handle `opts.instant` / `opts.auto` / `opts.idle` synchronously and without the
   UI (machines with `canIdle: false` can no-op this path).
 - `destroy()` must remove any `window` listeners and resolve any pending promise.
@@ -205,6 +206,118 @@ machine testing deterministic:
   `waitAction()` fires it the moment the round starts listening — so scripted tests can just click
   SPIN straight after PLAY, and a fast player is not ignored.
 
+## The balance book
+
+The economics of the whole casino live in one block at the bottom of the tunables in `main.pjs`
+(search `---- balance book ----`), read by JS through `CONFIG`. **Retune the economy there, not in
+the game files** — every lever below is a `CONFIG` value and every machine reads it.
+
+- **Luck** (`levelLuck` 0.0006/level, `luckCoin` 0.004/stack, `luckCap` 0.08) is a per-round odds
+  nudge each machine applies to its *own* model, and it is **hard-capped** in `computeEffects()`.
+  The cap is reached around level 135 even with five coins, and the admin winner rig overrides luck
+  to 0.75 (which is why the rig still works). Every machine's luck coefficient is tuned so that at
+  the cap that machine still returns **less than 100%** — luck is an edge, never a printer.
+- **Perks** are small and **bounded by the stake**, never by the payout: `winBonusStack` 0.002
+  (+1% of the stake on a win at five stacks), `rebateStack` 0.001 (+0.5% of the stake back on a
+  loss), `limitStack` 0.05 (Fortune: +5% table limit per stack, forever). They apply **on top of**
+  the game's own multiplier in `applyPerks()`, so a 200× jackpot can never ride them upward.
+  Tables that opt out (`noPerks: true`, blackjack) skip them entirely.
+- **Table limit.** `tableLimitBase` 400 × `level^tableLimitExp` 1.35 × the Fortune multiplier. It is
+  the most you may stake on **one round of any machine** (`tableLimit()` in `main.js`; a machine may
+  override it down with `maxBet()`, never up), and it caps the round's LOSS as much as its win. It is
+  printed in the bet panel. Level 1 → $400, level 30 → ~$39k, level 60 → ~$100k.
+- **House maximum.** `maxWinMult` 1000. `playRound()` clamps the multiplier to it *before* perks, so
+  no round of any game pays more than ×1000 the stake, whatever the machine, its luck or its perks
+  produce. It is a true upper bound for every machine, and for the two free-flown games — Rocket Crash
+  (target input clamped to it) and Frogger (`ladderCap` == 1000) — it is the real cap. **It only
+  actually bites on Rocket Crash.**
+- **Per-machine maximum.** In practice every other machine caps itself *below* the house clamp, and
+  says so: a machine may declare `maxWinMult` on its descriptor, the best multiplier one bet unit can
+  pay, and `renderBetTotal()` prints `game.maxWinMult × the round stake` (falling back to the house
+  value). Shipped: slots ×200 (the star triple), Roulette ×36 (a straight), Blackjack ×2.5 (a natural),
+  Horse ×60 (the payout clamp), Ghost Muncher ×4.9 (`WIN_SHARE × POT_CAP`), Treasure Chests ×4
+  (`chestHigh`), Russian Roulette `TOP_MULT` (the top rung), Neon Recall ×12 (its ladder cap). Each
+  value is *derived from the machine's own constant*, so it cannot drift out of step with the game.
+  The bet panel is therefore a truthful "this table cannot pay you more than" line for every table.
+- **Neon Recall's table maximum.** A memory ladder cannot be balanced with odds alone, because a player
+  who writes the pattern down beats any fixed chance, so the memory table is the one machine with a
+  **limit of its own**: `maxBet(level)` = `memTableBase` (100) × (level + 1), capped at `memTableMax`
+  (2000) — $300 at level 2, $2,000 at level 19 and forever after, and it grows with the level exactly
+  like the house limit does. That limit is the hard ceiling on a run: the shipped summit is ×10.88 and
+  the guard cap ×12, so the biggest run a perfect reader can ever cash is 10.88 × $2,000 = **$21,760**,
+  and at level 2 it is 10.88 × $300 = $3,264. Compare that with the ×1,000 crash/slot tail on a
+  $21,300 level-19 stake — the memory "guarantee" is four orders of magnitude smaller than the lottery
+  tails, which is the right shape for it: bounded, and it needs both a real read and the level first.
+
+**The returns, at base and at the luck cap** (`computeEffects()` maxed: level 200, all five capped
+perks, five Lucky Coins → `luck = 0.08`). Slot/Fortune-Lines figures are exact (exhaustive 6³ table
+and a 200k-spin Monte Carlo of the shipped reel model); the rest are their own closed forms:
+
+| machine | return at base | at the luck cap | note |
+| --- | --- | --- | --- |
+| Slots | 95.69% | 96.81% | exhaustive 6³ weighted table |
+| Fortune Lines | 92.37% (9 lines) | 92.95% | scatter pays × total bet; 95.6% on 1 line |
+| Roulette | 97.30% | ≤97.31% | 36/37 on every sensible bet — every chip is the same size (the bet) and the round is `bet × spots`; red/black are mutually exclusive; luck nudge is `luck·0.05/max(2, bestPay)`, so a straight-up backer converts at most a sliver of losses |
+| Horse Racing | 92.00% | ≤92.74% | `payout = 0.92/p` exactly (the 1.05 floor / 60 cap never bind: `p` ∈ [0.068, 0.353]); luck only inflates your runner's rating, and the relative boost is `(1+b)/(1+p·b) ≤ 1.008` |
+| Rocket Crash | 97.00% | ≤97.48% | `P(crash ≥ m) = 0.97(1+0.06·luck)/m`, flat at every target |
+| Treasure Chests | 93.75% | 93.75% | `(chestHigh+chestGem+chestMid+chestLow)/8`; **the four prizes must sum to < 8** or it prints money |
+| Russian Roulette | 90.00% | 90.00% | best play is cash out on rung 1; the first spin already loads **2 live of 6**, so no run is a formality and CASH OUT stays locked until the first blank; `rrRake` ships at 0 so the advertised multiplier is exactly what you keep. Perks are not `noPerks`, but Safety Net's +0.5% of stake on a loss leaves the best rung at 90.5% |
+| Blackjack | ~99.5% | ~99.5% | honest S17 3:2 game; **`noPerks: true`** — no luck, no perks, no rigged dealer. This is the one table whose edge is genuinely thin |
+| Ghost Muncher | ≤98% (bot 83%) | — | skill; the exact return is `p · 0.35 · E[pot]`, which peaks at **98%** when `p = 1` — clearing every maze, the farmable outcome, is a 2% *loss*. See its section below |
+| Frogger Gamble | ≤0.878 of stake (99% UB, *perfect* player) | — | skill; the ten-rung ladder is the ceiling, and it is *fitted* to a measured god reach — see "Frogger balance & the god harness" below. A bot that plays carelessly returns ~0.25 |
+| Neon Recall | ≤95% (reference) | — | skill; a **fitted** ladder — every rung past the knee is a fair bet for the reference player, whose return is flat at 95%, and every rung up to it pays exactly ×1.00, so there is no free money. Summits ×5.01 / ×10.88; hard ceiling $21,760 a run via its own table limit |
+
+**The invariant to preserve:** every chance machine returns **< 100%** at the luck cap, no single round
+of any machine pays more than `maxWinMult` × the stake, and **no machine has a farmable outcome** — an
+easy, human-repeatable result that pays more than the stake, which a player could compound round after
+round. Blackjack is the only table close to even, and it is deliberately stripped of luck and perks for
+exactly that reason. If a future change pushes any row above 100%, or gives any machine a repeatable
+`payout > stake`, that is a money printer — fix the machine, not the table.
+
+**No fast money (the farmability audit).** The average return is the *second* thing to check; the first
+is whether any single rung can be farmed. The audit, machine by machine, looks for an outcome that is
+(a) easy for a human and (b) worth more than the stake:
+
+- **Neon Recall** used to fail both halves. Pass 1 was a three-colour pattern — trivial to see, and
+  trivial to write down — paying a flat ×1.26, i.e. +26% a round with no risk at all, and the ladder
+  compounded to ×294.81 / ×771.49 on top of it. It is now **fitted**: a rung pays `memLadderRtp`
+  divided by the reference player's chance of reaching that rung, so the low rungs pay **exactly ×1.00**
+  (a push — and zero XP, because XP is charged on profit, so there is no churn loop either) and the
+  reference player's return is flat at 95% at every rung past the knee. The summit is ×5.01 / ×10.88
+  and the machine's table limit caps the run at $21,760.
+- **Ghost Muncher** used to be a printer: `0.35 · (5p + 0.25(1−p))` for a clear rate `p`, which is
+  **1.75× for a perfect player** and crosses even at `p ≈ 0.549`. The pot is now `arcadePotBase` 2.8 /
+  `arcadePotStep` 2.1 / `arcadePotCap` 14, and the exact return is `p · 0.35 · E[pot]` — 0.83 at the
+  bot's `p = 0.456`, 0.98 at `p = 1`, and **never even**: the farmable outcome (clear every maze) is a
+  2% loss. The machine's note below carries the closed form for `E[pot]`.
+- **The chance machines have no farmable outcome by construction.** Slots, Fortune Lines, roulette,
+  horse racing, crash, chests and the revolver all pay their *easy* outcomes under the stake; their rare
+  outcomes are rare per round and cannot be forced. The only per-play decisions that pay more than the
+  stake are the deliberate gambles (a chip on the felt, a crash target, a chest pick), and their return
+  is the row in the table above — none above 98%.
+- **Tails are bounded, not grindy.** `maxWinMult` 1000 is a *lottery*, not a grind: crash's ×1,000 tail
+  is about 1 round in 1,000 at a 2.00 target (and the target input itself is clamped at the max), the
+  slot five-of-a-kind is rarer still, and the memory summit is ladder-capped at ×10.88. Nothing on that
+  list can be *worked toward*, which is the property that makes a top end safe.
+
+**How the numbers were checked.** Slots and Fortune Lines were re-derived outside the page (the
+weighted enumeration and a Monte Carlo of the reel model, both in `execute_js`), then spot-checked in
+the live preview: mount a machine, set `.bet-input`, reset
+`state.stats.byGame[id] = {plays:0, staked:0, returned:0, …}`, run
+`for (let i=0;i<N;i++){ await casino.playRound(true, {idle:true}); if (i%20===19) await new Promise(r=>setTimeout(r,0)); }`
+and read `returned/staked`. Two traps: (1) with a real bankroll use `state.infMoney = true` and
+`state.money = 1e9` so `resolveStake()` doesn't shrink the bet out from under you; (2) **keep each
+`page_eval` short** (a few hundred rounds) — `recordPlay`/`renderHistoryPanel` cost ~15 ms a round, so
+a 20k-round loop blows the eval's time limit and, worse, **keeps running in the background after the
+timeout**, contaminating the next measurement. Machines that need a decision to open (`roulette`)
+want `state.idle.on = true` as well as `opts.idle`, because `inst.canPlay()` is checked before
+`play()` and only sees the state, not the opts. `revolver` and `frogger`/`arcade` return
+`{ multiplier: 1 }` under `opts.instant`, so instant mode cannot measure them at all — they are
+verified from their closed forms (the revolver ladder's `RET` column, the frogger `multFor` table)
+and by walking the real UI. Rocket Crash and Horse Racing are genuine per-round coin flips, so
+single-run numbers on a few hundred rounds are noisy in both directions — trust the closed form and
+use the sim to catch a broken formula, not to set the number.
+
 ## Machine notes
 
 - **Ghost Muncher** (`games/arcade.js`) is a real arcade maze — one random maze per play,
@@ -257,15 +370,24 @@ machine testing deterministic:
   | Elroy | 1.22 from 20% eaten | 1.1/1.22/1.35 ramp | −3 pts |
   | no-overlap + back-off | ghosts passed through | never overlap | −12 pts |
 
-  Net: the bot clears **45.6%** of mazes, a **0.85 return per play** (15% house edge). The bot cleared
+  Net: the bot clears **45.6%** of mazes, a **0.83 return per play** (17% house edge). The bot cleared
   36% on the previous 15×11 / 430 ms tuning and ~15% before that, so this is a deliberately more
-  forgiving machine without being a money printer. The jackpot pays `WIN_SHARE` (35%) of a pot that is
-  `POT_BASE` (5×) and grows by `POT_STEP` (0.25×) per loss up to `POT_CAP` (14×), so the steady-state
-  return per play is `0.35 · (0.25 + 4.75p)` for a clear rate `p`: it crosses even at `p ≈ 0.55`.
-  Anything that pushes the bot past ~0.50 makes the machine a money printer for anyone with a little
-  skill, which would break the perk/loan/bankrupt loop — so if a future retune wants more speed, more
-  lives or more time, it has to buy them back somewhere (or lower `WIN_SHARE` and update the info card,
-  the marquee copy and the nav's "take 35%" line together).
+  forgiving machine *without* being a money printer — and the pot is the part that changed in the last
+  balance pass. The jackpot pays `arcadeWinShare` (35%) of a pot that resets to `arcadePotBase` (2.8×)
+  and grows by `arcadePotStep` (2.1×) per loss up to `arcadePotCap` (14×). The exact return per play is
+  `R(p) = p · 0.35 · E[pot]` for a clear rate `p`, where `E[pot]` is the mean of the *capped* pot over
+  the geometric run of losses that precedes the clear:
+  `E[pot] = Σ_{L=0..L*} p(1−p)^L (2.8 + 2.1L) + (1−p)^(L*+1) · 14`, with `L* = ⌊(14−2.8)/2.1⌋ = 5`
+  (the naive `0.35 · (2.8p + 2.1(1−p))` is wrong — it ignores the cap, which is most of the value at
+  low `p`). That curve **never reaches even**: 0.38 at `p = 0.1`, 0.60 at `p = 0.2`, 0.83 at the
+  bot's 0.456, 0.92 at `p = 0.75`, 0.98 at `p = 1`; its maximum over `p` is the 0.98 endpoint. The reset
+  pot sits just under the `1 / 0.35 = 2.86×` break-even *on purpose*: clearing every maze is the one
+  outcome a player can farm, and it is a small **loss**. The old pot (base 5, step 0.25) paid
+  `0.35 · (5p + 0.25(1−p))`, i.e. **1.75× for a perfect player** and even at `p ≈ 0.549` — a printer for
+  anyone with a little skill, one good tuning pass away from the bot's 45.6%. If a future retune wants
+  more speed, more lives or more time, it has to buy them back in the pot (and the info card, the payout
+  note and the marquee blurb all read `WIN_SHARE`/`POT_*`, which is why the 35% is no longer
+  hard-coded anywhere).
 
   How the numbers were measured (the harness is rebuilt in `scratch/`, which does not survive a
   session — this is the recipe): a headless port of `genMaze` / `ghostChoose` / `stepEntity` plus a bot
@@ -307,16 +429,18 @@ machine testing deterministic:
   nothing on the drum itself is a tell.
 
   **The ladder.** `main.pjs`'s `rrLadder()` is the whole machine: ten rows of `[bank multiplier,
-  live rounds]`, shipped as ×1.10/1 · ×1.20/1 · ×1.37/1 · ×1.50/2 · ×2.00/2 · ×2.75/2 · ×3.50/3 ·
-  ×5.00/3 · ×7.50/4 · ×15.00/5. Round *n* is the *n*th spin of the run (so the round on the table
+  live rounds]`, shipped as ×1.35/2 · ×1.50/2 · ×1.80/2 · ×2.50/3 · ×3.50/3 · ×5.00/3 · ×7.50/4 ·
+  ×10.00/4 · ×14.00/5 · ×20.00/5. Round *n* is the *n*th spin of the run (so the round on the table
   is `blanks + 1`), surviving it sets the bank to that row's multiplier, and the row's live count
   is what the NEXT spin — the one for round *n+1* — loads. The load therefore fills forward
-  (1, 1, 1, 2, 2, 2, 3, 3, 4, 5 live of the six chambers) and the top rung leaves a single empty
-  chamber. `buildLadder()` in `revolver.js` reads `CONFIG.rrLadder` (via `cfgLadder()` in
-  `state.js`, which calls `root.rrLadder()` once at import), drops malformed rows, rounds the
-  multipliers to 2dp, clamps the live counts to `CH − 1`, sorts ascending by multiplier and falls
-  back to the identical `DEFAULT_LADDER` if `main.pjs` says nothing usable — so the module still
-  runs standalone in a test harness.
+  (2, 2, 2, 3, 3, 3, 4, 4, 5, 5 live of the six chambers) and the top rung leaves a single empty
+  chamber. **Round 1 loading two live is the request**: a third of the drum is fatal on the very
+  first pull, which is what stops a buy-in from being a coin-flip-free formality. `buildLadder()` in
+  `revolver.js` reads `CONFIG.rrLadder` (via `cfgLadder()` in `state.js`, which calls
+  `root.rrLadder()` once at import), drops malformed rows, rounds the multipliers to 2dp, clamps
+  the live counts to `CH − 1`, sorts ascending by multiplier and falls back to the identical
+  `DEFAULT_LADDER` if `main.pjs` says nothing usable — so the module still runs standalone in a
+  test harness.
 
   **This replaced a flat ×2-per-blank bank with `rrDouble`/`liveFor()`/`rrLiveStart`/`rrLiveMax`**
   (that design doubled the bank every blank and added one live round each time the bank doubled,
@@ -382,10 +506,10 @@ machine testing deterministic:
 
   **Return.** The ladder is deliberately unkind, and this is the part to check first if a balance
   complaint comes in. The chance of surviving to the end of round *n* is `∏(1 − live_k/CH)` for
-  k = 1…n, so a buy-in cashed on rung *n* returns `mult_n × that product` on average: **0.917,
-  0.833, 0.793, 0.579, 0.514, 0.472, 0.300, 0.214, 0.107, 0.036** per unit staked. The best rung
-  is the FIRST one (91.7%), every rung above it is worse, and the top rung pays ×15.00 on a
-  3.6% chance. So the house edge at best play — spin once, cash out, always — is **8.3%**, and it
+  k = 1…n, so a buy-in cashed on rung *n* returns `mult_n × that product` on average: **0.900,
+  0.667, 0.533, 0.370, 0.259, 0.185, 0.0926, 0.0412, 0.0096, 0.0023** per unit staked. The best rung
+  is the FIRST one (90.0%), every rung above it is worse, and the top rung pays ×20.00 on a
+  0.011% chance. So the house edge at best play — spin once, cash out, always — is **10%**, and it
   sits with whoever walks away: one more spin is always the worse bet, however tempting the next
   rung looks. The info card prints this column straight off the live table (it computes `reach`
   and `ret` from `LADDER`, so retuning `main.pjs` retunes the card's own admission), marks the
@@ -396,13 +520,13 @@ machine testing deterministic:
 
   **Verifying the climb from `page_eval`.** Stub `Math.random` (it is the only thing that decides
   a shot — `rolledLoad()`/the spin path call it once per shot) and walk the ladder. With
-  `Math.random = () => 0.99` every shot is a blank, so ten spins must land the bank on ×1.10,
-  ×1.20, ×1.37, ×1.50, ×2.00, ×2.75, ×3.50, ×5.00, ×7.50, ×15.00 in order with the sub-lines
-  reading "round *n* of 10 · 1,1,1,2,2,2,3,3,4,5 live"; at the top SPIN must be disabled while
+  `Math.random = () => 0.99` every shot is a blank, so ten spins must land the bank on ×1.35,
+  ×1.50, ×1.80, ×2.50, ×3.50, ×5.00, ×7.50, ×10.00, ×14.00, ×20.00 in order with the sub-lines
+  reading "round *n* of 10 · 2,2,2,3,3,3,4,4,5,5 live"; at the top SPIN must be disabled while
   CASH OUT stays live. Then climb nine rungs at 0.99 and set `Math.random = () => 0.5` for the
   tenth: 0.5 is only fatal if the drum really holds 5 of 6, so a BANG on that shot (bank ×0.00,
   cash-out $0, message "BANG…") is the proof that the top rung loads five live. Both walks also
-  prove the ladder is read from `main.pjs`: temporarily set row 1 to `[1.13, 2]`, `page_refresh`,
+  prove the ladder is read from `main.pjs`: temporarily set row 1 to `[1.42, 2]`, `page_refresh`,
   and the boot message and `CONFIG.rrLadder` both report it.
 
 - **Rocket Crash** (`games/crash.js`) is the multiplier machine: the rocket climbs from ×1.00 and the
@@ -461,6 +585,19 @@ machine testing deterministic:
   post-cash-out ghost tail is drawn SOLID red once it has blown (dashed yellow only while it is still
   flying), and the translucent area fills under the curve can read as "blocky rectangles" to the eye.
 
+- **Roulette** (`games/roulette.js`) is the European wheel. The felt is a set of picks, and **every
+  pick takes a chip of exactly the bet** — so a round is worth `bet × picks`, not the bet split
+  across the picks. That makes the chips uniform by construction, and it plugs into the controller's
+  multi-unit path (`getBetUnits: () => Math.max(1, picks.size)`, `unitLabel: "spots"`), so
+  `lineBetCost()` stakes the whole felt and `betCap()` caps the bet at `tableLimit / picks` — the
+  felt can never pass the table limit. `toggle()` also refuses a click that *would* break it, so the
+  bet is never silently shrunk by adding a spot. **`getBetUnits` must return 1 while idle:** idle
+  clears the felt and backs a single colour, and a leftover manual selection would otherwise make the
+  controller charge `bet × picks` while the round only paid one chip — a money printer. Red and
+  black are the two halves of the same spin, so picking one clears the other (the `toggle` swap) —
+  backing both only donates a chip to the zero. Payout is `Σ(winning spots' pay) / picks`, so the RTP
+  is unchanged by the chip model: 36/37 = 97.30% on any sensible combination.
+
 - **Slots** (`games/slots.js`) is the plain three-reel machine: one payline, six symbols, best single
   result pays. Everything a spin can win lives in the `SYMBOLS` table (`three` = triple pay, `two` =
   pair pay, `w` = base reel weight) and `evaluate(ids)` walks that table to find the highest-paying
@@ -481,33 +618,48 @@ machine testing deterministic:
   weighted table — replicate `SYMBOLS` + `evaluate()` in a script and sum `p · pay` over all 216
   outcomes. Note how much the anchoring matters: the cherry pair fires on **6.3%** of spins
   (`p_cherry² · (1 − p_cherry)`), where an unanchored cherry pair would fire on 18.9% and push the
-  machine past 100%. Lucky Coin perks shift the weights toward the premium tiers and are the only
-  thing that moves the return at runtime — the paytable itself never changes.
+  machine past 100%. Lucky Coin perks shift the weights toward the premium tiers (`tier 1` gets
+  `1 + luck·0.2`, `tier 2` `1 + luck·0.4`) and are the only thing that moves the return at runtime —
+  the paytable itself never changes, and even at the luck cap the machine returns **96.8%**.
 
 - **Neon Recall** (`games/memory.js`) has no dice in it: the only randomness is which colours the
   pattern uses, so **the difficulty curve is the flash timing** — how long each colour stays lit and
   how long the gap between them is. Everything tunable lives in main.pjs (`mem*` → `CONFIG`).
 
-  **The ladder is `memLevels` (27) LEVELS, one colour each** — a difficulty ladder, not a
-  length-ceiling race. SEQUENCE opens at `memStartLen` (3 colours) and tops out at 3 + 26 = **29**;
-  RANDOM opens at `memRandStartLen` (5), because a freshly re-rolled three-colour pattern is no test
-  at all, and tops out at 5 + 26 = **31**. Because the two modes now have *different* maxima, the
-  single module-level `maxLen` is gone: `startFor(mode)` and `maxLenFor(mode)` are the only
-  accessors. Both modes run exactly `levels` passes and the pip track shows `levels` pips in both,
-  so nothing may assume the old per-mode pass counts. `setMode()` rebuilds the pip track (the mode is
-  locked mid-run, so there is never a live run to invalidate), and the info card's ladder is keyed by
-  **colour count, not pass** — with the 3-colour row printing a dash in the RANDOM column. A
-  pass-keyed table would sit SEQUENCE's 3-colour first pattern next to RANDOM's 5-colour one and
-  quietly lie about the payouts; the ladder's bar is log-scaled, because the bank spans x6,965
-  (SEQUENCE) / x26,351 (RANDOM) and a linear bar left every early rung as a stub.
+  **The ladder is `memLevels` (19) LEVELS, one colour each** — a difficulty ladder, not a length-ceiling
+  race. SEQUENCE opens at `memStartLen` (3 colours) and tops out at 3 + 18 = **21**; RANDOM opens at
+  `memRandStartLen` (5), because a freshly re-rolled three-colour pattern is no test at all, and tops
+  out at 5 + 18 = **23**. Because the two modes have *different* maxima, the single module-level
+  `maxLen` is gone: `startFor(mode)` and `maxLenFor(mode)` are the only accessors. Both modes run
+  exactly `levels` passes and the pip track shows `levels` pips in both, so nothing may assume the old
+  per-mode pass counts. `setMode()` rebuilds the pip track (the mode is locked mid-run, so there is
+  never a live run to invalidate), and the info card's ladder is keyed by **colour count, not pass** —
+  with the 3-colour row printing a dash in the RANDOM column. A pass-keyed table would sit SEQUENCE's
+  3-colour first pattern next to RANDOM's 5-colour one and quietly lie about the payouts; the ladder's
+  bar is **square-root** scaled, because the bank only spans ×1.00 to ×10.88 and a linear bar squashed
+  every rung under the summit into an invisible stub.
 
-  **Every level pays a bit more than the level before.** Pass 1 banks x1.26 (SEQUENCE) / x1.33
-  (RANDOM) — the old flat step — but the step then **grows by `memStepGrow` (0.01) per level**, so
-  level 27 pays x1.52 / x1.59. The bank is the **product** of the steps, not the sum, so it
-  accelerates rather than creeping: SEQUENCE x5.94 by level 7 and **x6,965.27 at the summit**, RANDOM
-  x8.60 by level 7 and **x26,351.05**. `stepOf`/`stepAt`/`multOf` build and memoise the product
-  ladder; never re-derive the bank by adding steps. Want a gentler widening? `memStepGrow` is the
-  dial (0 makes it the old flat 1.26-per-pass ladder again).
+  **The ladder is FITTED, not compounded** — this is the balance-critical part. A rung does not pay
+  "the previous rung plus a bit"; it pays `memLadderRtp` **divided by the chance the reference player
+  has of reaching that rung**. The reference curve is: perfect to `memSkillKnee` (8) colours, then
+  `memSkillDecay` (0.88) per extra colour in SEQUENCE / `memSkillDecayRand` (0.85) in RANDOM (a
+  genuinely harder read, so it earns more per rung). Two consequences fall straight out of the formula:
+
+  - **The low rungs pay exactly ×1.00.** Everything up to the knee is a fair bet for a player who never
+    misses, so SEQUENCE's first six rungs (3–8 colours) and RANDOM's first four (5–8) pay
+    `memLadderRtp / 1` — and ×1.00 is a bank, not a win: no free money, and no XP either, because XP
+    is charged on profit, so a ×1.00 cash-out cannot be churned.
+  - **The reference player's return is flat at 95% at every rung**, so pushing on is neither free money
+    nor a trap. `multAt(mode, p)` computes the whole ladder from those knobs; there is no
+    `stepOf`/`stepAt` and no step table to keep in sync. Shipped ladders — SEQUENCE, 3–21 colours:
+    `1.00` ×6, then `1.08 1.23 1.39 1.58 1.80 2.05 2.32 2.64 3.00 3.41 3.88 4.40`, summit
+    **×5.01**; RANDOM, 5–23 colours: `1.00` ×4, then
+    `1.12 1.31 1.55 1.82 2.14 2.52 2.96 3.49 4.10 4.83 5.68 6.68 7.86 9.24`, summit **×10.88**.
+    The old ladder compounded a ×1.26 first step and paid ×294.81 / ×771.49 at the top — a fortune in a
+    handful of rounds for anyone who could read — which is why this is fitted now.
+  - `memLadderCap` (8) / `memLadderCapRand` (12) are **inert guards** sitting a hair above the shipped
+    summits (5.01 / 10.88): they exist so a future retune of the decay cannot silently blow past the
+    machine's table maximum. They are not the ceiling — the table limit is (see the balance book).
 
   **Faster as it grows, up to a point.** `flashFor(n)`/`gapFor(n)` = base × decay^(n − the mode's
   opening length), floored at `memMinFlashMs`/`memMinGapMs`, and the ramp is **frozen at
@@ -530,3 +682,136 @@ machine testing deterministic:
   flash time the machine just used. `document.hidden` is true in the editor preview, but the memory
   machine's timings measure true anyway (measured 483 ms for a 460 ms cycle), so the pass walk above
   is a real timing check, not a guess.
+
+## Frogger balance & the god harness
+
+`games/frogger-math.js` is the entire road and it has no DOM; `games/frogger.js` is the playable game
+on top of it. **This machine is the one table in the casino whose paytable is a *proof* rather than a
+closed form**, because the road is deterministic and fully on screen: a script can read every lane's
+convoy, so "the player" has to be modelled as an optimal planner. Read this before touching `TIERS`,
+`restSec`, the pocket constants or `ladderRungs`.
+
+**The two rules that carry the balance.**
+
+- **`restSec` — the sweep clock (3.0s).** The verge and every grass median shelter the frog for
+  `restSec`, then the road sweeps it away (`deathKind: "swept"`, the 🌊 SWEPT card, stake gone). Without
+  a clock the traffic is fully visible, so a patient *or scripted* player could stand on a median
+  until the whole road lined up and stroll to the summit for free — the clock is what turns a patience
+  puzzle into a timed crossing. A block of nine hops plus settles is 2.88s (`hopSec` 0.2 × 9 + `settleSec`
+  0.12 × 9), so 3.0s means the player must read the traffic at a glance and go. It is the biggest
+  difficulty dial in the machine **and the dial the ladder is fitted against**: raise it and the god's
+  reach rises with it, so the ladder has to come down.
+- **Bank on grass only.** The verge and the ten medians, nowhere else. Paying per lane is a printer
+  (the god's per-lane reach stays high forever), and "bank anywhere" is worse: the landing spot is a
+  free choice, so "hop one lane, bank ×1.00" is a guaranteed even-money exit and "bank the deepest lane
+  I can legally reach" cashes every intermediate rung. Ten bankable places turn each island into a real
+  push-or-bank decision, and — crucially — make the ladder a *partition of the run's outcomes*, which
+  is what makes it boundable at all.
+
+**The doctrine (the reason the ladder looks the way it does).** A strategy is a rule that decides, at
+each bankable island, whether to bank or push on, so the best any strategy can do is the best *banking
+schedule*, and a schedule partitions the outcomes by the deepest island reached. With `P_j` = the
+chance a perfect player reaches island j (and `P_11 = 0`):
+
+```
+EV(best strategy) = SUM_j (P_j - P_j+1) x rung_j   <=   rtp (0.90)
+```
+
+Rung 1 therefore sits near `rtp / P_1` and every deeper rung can only be paid out of the thin tail of
+mass that dies before it. The old note in the source claimed `rung_i ~= rtp / P_i`, which is **not**
+the bound — it is far too generous, because it lets every island return `rtp` simultaneously on the
+same branch. If you change the ladder, check it against the SUM form, not per-rung.
+
+**The measurement (30k seeds with the shipped tiers; this is the fit the ladder came from).** God
+planner settings: `dt 1/200`, `waitVerge 3`, `waitMedian 3`, `horizon 110`, `sourceKill`, `slop 0`,
+`maxDepth 100`, three 10k chunks (~515s each):
+
+| island | point reach | 99% Wilson upper |
+| --- | --- | --- |
+| 10 | 66.653% | 67.2834% |
+| 20 | 19.847% | 20.3877% |
+| 30 | 3.513% | 3.7691% |
+| 40 | 0.527% | 0.6332% |
+| 50 | 0.047% | 0.0860% |
+| 60 | 0.010% | 0.0352% |
+| 70/80/90/100 | 0 hits | 0.0180% (the zero-hit Wilson bound, `z²/n`) |
+
+`maxSeen` 69 (the best run reached lane 69). An earlier 4k run gave 66.7 / 19.3 / 3.4 / 0.375 / 0 — the
+sampling noise is only in the deep tail, so the fit is not fragile there.
+
+**The ladder.** `ladderRungs: [1.25, 1.35, 1.50, 1.75, 2.25, 3.50, 6.00, 12.00, 25.00, 50.00]`
+(one rung per island; `ladderCap` 1000 must stay equal to `maxWinMult` in `main.pjs`). Against the
+upper-bound weights that ladder gives **god EV ≤ 0.8779** (point estimate 0.860), i.e. it is fitted to
+*just* under `rtp` 0.90. Rejected neighbours, so nobody re-derives them: `[1.30 … 60]` → 0.9157
+(**over** the ceiling, do not ship) and `[1.20, 1.30, 1.45, 1.60, 2.00, 3.00, 5.00, 10.00, 22.00, 45.00]`
+→ 0.8427, the safe alternative if you ever loosen the road (it costs the player 0.05 at the first
+island and nothing else, and buys 0.035 of headroom). Note where the 0.878 comes from: 0.586 is rung 1
+× P_10, 0.224 is rung 2 × P_20, 0.047 is rung 3 × P_30, and everything from island 40 up contributes
+0.021 between them. **The ladder is a bet on the first island**, which is why the island-10 wall is
+the thing to tune.
+
+**How much the player actually gets.** A myopic bot (the harness's `simRun`: fixed margin, no
+look-ahead, banks at the first legal place — `dt 1/180`, `margin .06`, `postMargin .06`, `panicK .35`,
+`sourceKill`, `wait 3`, 6000 runs) reaches island 10 19.75% of the time, island 20 0.60%, island 30
+0.017% (`maxSeen` 32) and returns **0.2475** of stake. That is a *floor*: a human who reads the road
+better sits between the bot and the god, so the realistic table return is roughly 0.4–0.5, with the
+hard ceiling of 0.878 reserved for a planner that does not exist. If you want the machine to *feel*
+fairer, raise the road's generosity (a longer `restSec`, more pocket) and re-fit — do **not** raise the
+rungs without re-measuring, and do not "compensate" by lowering rung 1 in isolation without re-running
+the SUM.
+
+**What invalidates the fit.** Any change to `TIERS` (speeds, `cw`, convoy sizes, `carW`, gaps), any
+change to `restSec`, `blockHi`/`blockDecay`/`blockTierStep`/`blockMin`, or the collision box changes
+`P_j` and voids the 0.878. The two root knobs are `main.pjs`'s `froggerBlockSec` (0.34) and
+`froggerRestSec` (3 — write it as `3`, not `3.0`, or pjs keeps it as a string), which `create()`
+copies into `FROG_CONST`. After any such change: re-run the god survey, rebuild the upper-bound
+weights, and either re-fit or accept the new number only if it is still under 0.90.
+
+**The harness (it does not ship — it lives in `scratch/`, which dies with the session).** Two files
+are uploaded so a future session can pull them back:
+
+- `https://user.uploads.dev/file/3f390f78e4c69016d22b6346d3862832.js` — `frog-par.js`, the parallel
+  survey: `parSurvey({mode:"god"|"bot", runs, workers, dt, seedBase, stride, waitVerge, waitMedian,
+  opts, tiers, block})`, plus `islandTable(res, z)`, `wilsonUpper`, `godEV`, `godEVUpper`, `ISLANDS`.
+  It spawns workers that `import` a data-URL copy of `frog-sweep.js` and read the *current*
+  `src/games/frogger-math.js` text, so it always measures the shipped file.
+- `https://user.uploads.dev/file/209d32db3e4428f97cd63d518db3eb7a.js` — `frog-sweep.js`, the serial
+  model harness: `applyCfg({tiers, block, dt})`, `simRun` (the myopic bot), `godReach(seed, opts)`
+  (the god planner), `clone`.
+
+```js
+const parSrc = await fs.readTextFile("scratch/frog-par.js");
+const P = await (new Function("fs","tools","return (async()=>{"+parSrc+"})()"))(fs, tools);
+const RUNGS = [1.25, 1.35, 1.50, 1.75, 2.25, 3.50, 6.00, 12.00, 25.00, 50.00];
+const r = await P.parSurvey({ mode:"god", runs:10000, workers:8, dt:1/200, waitVerge:3, waitMedian:3,
+  opts:{ maxDepth:100, horizon:110, sourceKill:true, slop:0 } });
+P.islandTable(r, 2.326);            // per-island point + 99% upper bounds
+P.godEV(r, RUNGS); P.godEVUpper(r, RUNGS, 2.326);
+```
+
+Gotchas, all of them learned the hard way:
+
+- **`godEV` used to read `res.reach[island]` — the per-lane bin — instead of the cumulative reach.**
+  It is fixed, but keep it cumulative: the planner's depth histogram has literal **zero bins at the
+  island lanes** (mass sits just past them), so a bin read always returns 0 and every ladder looks
+  free. `islandTable` (cumulative sums) is the reliable path.
+- **`waitMedian` defaults to 6.5** in `parSurvey` — always pass `waitMedian: 3` for a fit against the
+  shipped clock, or you will measure a road that no longer exists.
+- The god planner costs ~500s per 10k runs; the bot is ~1/1000 of that (`secs: 0.4` for 6000 runs), so
+  sweep bot settings freely and reserve god runs for the final number.
+- `dt` matters: the fit used `1/200`. The bot floor used `1/180`. Both are fine, but don't mix them
+  inside one table.
+
+**Driving the real game in the preview** (this is the only way to check the payout end-to-end, and
+`opts.instant` cannot: `frogger` refuses instant mode and returns `{multiplier: 1}`). The controls
+listen on **`pointerdown`, not `click`** — `el.click()` does nothing to them, dispatch a
+`PointerEvent("pointerdown", {bubbles:true})`. Select them as **`button.fbtn.cross` / `button.fbtn.bank`**:
+a `/BANK/` text search finds the topbar's 💥 `BANKRUPT` first. And **the whole game freezes while any
+modal is open** — `paused()` returns true when `#modalLayer` is visible, so a round can sit in "GET
+READY" forever with a frozen sweep clock and the next `playRound` will silently no-op on the `playing`
+guard; hide the modal before you drive. A clean live check: patch `TIERS` to one tiny car per lane with
+`cw = [500, 500]` (a sparse convoy makes the column almost always clear), shorten `hopSec` to 0.05, set
+`frogHalfW = 0`, `mountGame("frogger")`, stake $10, then `pointerdown` the cross button until the HUD
+reads `Lanes crossed 10`, bank, and check the money: **it paid $13 on a $10 stake at ×1.25** ("BANKED
+×1.25 — 10 lanes crossed").
+

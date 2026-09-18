@@ -1,42 +1,42 @@
-import { state, CONFIG, canAfford, addMoney, round2, saveState, emit } from "./state.js";
+import { state, CONFIG, canAfford, addMoney, saveState, emit } from "./state.js";
 
 export const PERKS = {
   luckyCoin: {
     name: "Lucky Coin",
     icon: "\u{1F340}",
     max: 5,
-    baseCost: 400,
-    growth: 2.05,
-    blurb: "A stacked coin tips the odds your way in every game.",
-    effect: (n) => ({ luck: n * 0.012 }),
-    stacks: (n) => `+${(n * 1.2).toFixed(1)}% win chance`,
+    baseCost: 250,
+    growth: 1.6,
+    blurb: "A stacked coin tips the odds your way in every game. Deliberately small: luck is an edge here, never an income.",
+    effect: (n) => ({ luck: n * CONFIG.luckCoin }),
+    stacks: (n) => `+${(n * CONFIG.luckCoin * 100).toFixed(1)}% luck`,
   },
   fatStacks: {
     name: "Fat Stacks",
     icon: "\u{1F4B0}",
     max: 5,
-    baseCost: 500,
-    growth: 1.95,
-    blurb: "Bigger payouts whenever you hit a winner.",
-    effect: (n) => ({ winMult: n * 0.05 }),
-    stacks: (n) => `+${n * 5}% winnings`,
+    baseCost: 250,
+    growth: 1.6,
+    blurb: "A sliver extra on every winning hand. It is a cut of your STAKE, not of the payout, so it can never ride a jackpot upward.",
+    effect: (n) => ({ winBonus: n * CONFIG.winBonusStack }),
+    stacks: (n) => `+${(n * CONFIG.winBonusStack * 100).toFixed(1)}% of your stake on a win`,
   },
   safetyNet: {
     name: "Safety Net",
     icon: "\u{1F6DF}",
     max: 5,
-    baseCost: 450,
-    growth: 1.95,
-    blurb: "The house quietly hands back part of what it takes.",
-    effect: (n) => ({ rebate: n * 0.03 }),
-    stacks: (n) => `refund ${n * 3}% of every loss`,
+    baseCost: 250,
+    growth: 1.6,
+    blurb: "The house quietly hands back a sliver of every losing stake. Flat and small, so it stays a courtesy rather than an edge.",
+    effect: (n) => ({ rebate: n * CONFIG.rebateStack }),
+    stacks: (n) => `refund ${(n * CONFIG.rebateStack * 100).toFixed(1)}% of your stake on a loss`,
   },
   quickHands: {
     name: "Quick Hands",
     icon: "\u26A1",
     max: 5,
-    baseCost: 350,
-    growth: 1.85,
+    baseCost: 200,
+    growth: 1.5,
     blurb: "Idle mode plays faster, so the grind speeds up.",
     effect: (n) => ({ idleSpeed: n * 0.15 }),
     stacks: (n) => `idle runs ${n * 15}% faster`,
@@ -45,9 +45,9 @@ export const PERKS = {
     name: "Scholarship",
     icon: "\u{1F393}",
     max: 5,
-    baseCost: 550,
-    growth: 1.95,
-    blurb: "Learn the tables faster. Levels are the fairest luck of all.",
+    baseCost: 250,
+    growth: 1.6,
+    blurb: "Learn the tables faster. Levels pay a bonus and widen your table limits.",
     effect: (n) => ({ xpMult: n * 0.25 }),
     stacks: (n) => `+${n * 25}% XP gain`,
   },
@@ -55,11 +55,11 @@ export const PERKS = {
     name: "Fortune",
     icon: "\u{1F31F}",
     max: Infinity,
-    baseCost: 200,
+    baseCost: 400,
     growth: 1.35,
-    blurb: "Raw reward. Every stack adds 1% to all winnings, forever. Never stops getting more expensive.",
-    effect: (n) => ({ winMult: n * 0.01 }),
-    stacks: (n) => `+${n}% winnings`,
+    blurb: "Raw reward. Every stack lifts every table's maximum bet by 5%, forever \u2014 more on the felt, same odds. Never stops getting more expensive.",
+    effect: (n) => ({ limitMult: n * CONFIG.limitStack }),
+    stacks: (n) => `table limits +${(n * CONFIG.limitStack * 100).toFixed(0)}%`,
   },
 };
 
@@ -83,7 +83,7 @@ export function perkCost(id) {
 }
 
 export function computeEffects() {
-  const e = { luck: 0, winMult: 1, rebate: 0, xpMult: 1, idleSpeed: 1 };
+  const e = { luck: 0, winBonus: 0, rebate: 0, xpMult: 1, idleSpeed: 1, limitMult: 1 };
   e.luck += Math.max(0, state.level - 1) * CONFIG.levelLuck;
   for (const id of Object.keys(state.perks)) {
     const p = PERKS[id];
@@ -95,7 +95,9 @@ export function computeEffects() {
       e[k] = (e[k] || 0) + eff[k];
     }
   }
-  e.luck = Math.max(0, Math.min(0.75, e.luck));
+  /* a hard ceiling on luck, so no combination of levels + coins can ever tip a
+     machine past 100% -- see the balance book in main.pjs */
+  e.luck = Math.max(0, Math.min(Math.max(0, CONFIG.luckCap), e.luck));
   if (state.cheatWin) e.luck = 0.75;
   return e;
 }
@@ -147,9 +149,4 @@ export function perkShopCount() {
     if (!isMaxed(id) && canAfford(perkCost(id))) n++;
   }
   return n;
-}
-
-export function totalWinBonusPct() {
-  const e = computeEffects();
-  return round2((e.winMult - 1) * 100);
 }
