@@ -16,6 +16,3 @@ from the repo, so relative ES-module imports (`./state.js`, `../audio.js`, ...) 
   synthesized whirl (see DEV-NOTES.md), and nothing else breaks.
 - GitHub Pages caches JS/CSS for ~10 minutes (`Cache-Control: max-age=600`); hard-reload or tick
   "Disable cache" in DevTools after uploading.
-
-The Perchance generator itself keeps working as before — this file and the repo copy are only
-about the GitHub Pages mirror.
