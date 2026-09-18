@@ -1526,7 +1526,7 @@ const cheatBtn = document.getElementById("cheatBtn");
    walks around it — this just stops the password from being readable at a glance.
    The unlock lasts for the session (it resets on reload) and wrong guesses are
    rate-limited. To change the password: sha256 the new one and paste the hex here. */
-const ADMIN_PASS_HASH = "9f425cd422895f3948a8592dab9f3cbdb5bdfc4013b38e385c936a6129ea73c4";
+const ADMIN_PASS_HASH = "3992b59e3ebc1716f71006b79712822c2938938b89b97af1359d07c424656fe1";
 const ADMIN_MAX_TRIES = 3;
 const ADMIN_LOCKOUT_MS = 30000;
 let adminUnlocked = false;
