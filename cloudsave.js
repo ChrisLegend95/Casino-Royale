@@ -43,7 +43,7 @@ import {
 import { el, clear, fmt, toast, modal, confirmDialog } from "./ui.js";
 
 /* ---- paste the OAuth client ID here (see the setup steps above) ---- */
-const CLIENT_ID = "";
+const CLIENT_ID = "692690829308-7oc15ble9fpjispbd07ska2m6kns08gs.apps.googleusercontent.com";
 
 const APP_TAG = "casino-royale";
 const BLOB_VERSION = 1;
