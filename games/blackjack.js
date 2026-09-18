@@ -1,4 +1,4 @@
-import { el, clear, sleep, toast, confetti, shake } from "../ui.js";
+import { el, clear, sleep, confetti, shake } from "../ui.js";
 import { stageShell } from "./common.js";
 import { infoBtn, openInfo, examples, exampleRow, sec, ul, note, payChips } from "./infocard.js";
 import { sfx } from "../audio.js";
@@ -47,8 +47,15 @@ export default {
   blurb: "Beat the dealer to 21 without busting. The House always plays by the rules.",
   payoutNote: () =>
     'Win <span class="k">2x</span>, blackjack <span class="k">2.5x</span>, push returns your bet. ' +
-    "Double down to stake twice on one card. Lucky Coin perks can save a bust.",
+    "Double down to stake twice on one card. House edge <b>under 1%</b> \u2014 perks and luck do not apply at this table.",
   minBet: 1,
+  /* a natural, paid 3:2, is the best a round can return relative to the stake */
+  maxWinMult: 2.5,
+  noPerks: true,
+  /* This table's edge is thinner than the level-reward comp (see levelReward in
+     main.pjs), so it pays no XP: otherwise grinding the maximum bet here would
+     slowly print money through levelling alone. */
+  noXp: true,
 
   create(app) {
     let shoe = buildShoe(6);
@@ -56,7 +63,6 @@ export default {
     const player = { cards: [] };
     let hidden = true;
     let busy = false;
-    let usedSave = false;
     let actionResolver = null;
     let lastStake = 1;
     let dealerNodes = [];
@@ -322,10 +328,8 @@ export default {
     async function play(stake, opts) {
       const instant = !!(opts && opts.instant);
       const auto = !!(opts && opts.auto);
-      const luck = app.effects().luck;
       lastStake = stake;
       busy = true;
-      usedSave = false;
       dealt = false;
       resetFx();
       hidden = true;
@@ -390,21 +394,6 @@ export default {
         render();
         if (!instant) await sleep(280);
         if (score(player.cards).total > 21) busted = true;
-      }
-
-      if (busted && !usedSave && score(player.cards).total > 21) {
-        const chance = Math.min(0.3, luck);
-        if (chance > 0 && Math.random() < chance) {
-          usedSave = true;
-          player.cards.pop();
-          player.cards.push(drawCard());
-          render();
-          if (!instant) {
-            toast("Lucky save! The dealer looks away\u2026", "gold", 1600);
-            await sleep(500);
-          }
-          busted = score(player.cards).total > 21;
-        }
       }
 
       if (busted) {
@@ -502,10 +491,10 @@ export default {
               "It never changes, so you always know exactly what the dealer will do next.",
             ])
           ),
-          sec("Lucky Coin perks",
+          sec("Why there are no perks here",
             ul([
-              "Perks can <b>save a bust</b>: the busting card is swapped for a fresh one (up to a <b>30%</b> chance).",
-              "One save per hand, and it only ever triggers on a bust.",
+              "The House plays by the book, so the edge at this table is already under <b>1%</b> \u2014 far too thin to hand any of it back.",
+              "Perks and luck are <b>switched off</b> at blackjack: what you get is the honest game at the published 3:2.",
             ])
           )
         )

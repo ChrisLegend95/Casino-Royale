@@ -11,11 +11,11 @@ export const SYMBOLS = [
   { id: "grape", glyph: "\u{1F347}", w: 18, tier: 0, pay: { 3: 15, 4: 40, 5: 230 } },
   { id: "bell", glyph: "\u{1F514}", w: 14, tier: 1, pay: { 3: 28, 4: 110, 5: 420 } },
   { id: "gem", glyph: "\u{1F48E}", w: 9, tier: 1, pay: { 3: 50, 4: 230, 5: 950 } },
-  { id: "seven", glyph: "7\uFE0F\u20E3", w: 5, tier: 2, pay: { 3: 100, 4: 450, 5: 2800 } },
-  { id: "star", glyph: "\u2B50", w: 2.5, tier: 2, pay: { 3: 200, 4: 900, 5: 6500 } },
+  { id: "seven", glyph: "7\uFE0F\u20E3", w: 5, tier: 2, pay: { 3: 100, 4: 450, 5: 700 } },
+  { id: "star", glyph: "\u2B50", w: 2.5, tier: 2, pay: { 3: 200, 4: 700, 5: 1000 } },
 ];
 
-export const WILD = { id: WILD_ID, glyph: "\u{1F0CF}", w: 4, pay: { 3: 250, 4: 1200, 5: 8500 } };
+export const WILD = { id: WILD_ID, glyph: "\u{1F0CF}", w: 4, pay: { 3: 250, 4: 800, 5: 1000 } };
 export const SCATTER = { id: SCATTER_ID, glyph: "\u{1F4A0}", w: 3.1, pay: { 3: 5, 4: 25, 5: 130 } };
 
 export const SYMBOL_BY_ID = {};
@@ -43,9 +43,12 @@ const CFG = {
   wildReels: [1, 2, 3],
   freeBoost: 0.14,
   retriggerCap: 40,
-  tierLuck1: 0.6,
-  tierLuck2: 1.2,
-  luckBonus: 0.4,
+  /* Luck coefficients, kept small so the machine stays under 100% even at the
+     luck cap (see the balance book in main.pjs). Together they are worth about
+     +1.1% of return at the cap -- an edge, not a printer. */
+  tierLuck1: 0.48,
+  tierLuck2: 0.96,
+  luckBonus: 0.32,
 };
 
 export function reelWeights(reel, luck) {

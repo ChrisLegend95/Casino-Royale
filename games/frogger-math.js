@@ -2,7 +2,8 @@
    frogger-math.js — the traffic + collision model behind Frogger Gamble.
 
    No DOM in here, so the model can be calibrated and re-tuned headlessly
-   (Monte-Carlo over a bot player).
+   (Monte-Carlo over a bot player, and an exhaustive "god planner" that finds
+   the best schedule a perfect player could execute).
 
    Units: one lane is 1.0 tall, the road is FROG_CONST.roadW wide, the frog
    sits at a fixed FROG_CONST.frogX, and time is in seconds. The renderer
@@ -12,21 +13,41 @@
    THE ROAD IS 100 LANES LONG, in ten blocks of ten.
 
      - Every tenth lane (10, 20, ... 90) is a SAFE ISLAND: a traffic-free
-       grass median where nothing can touch the frog and it can rest as long
-       as it likes. Lane 100 is the SUMMIT — also safe, and crossing into it
+       grass median. Lane 100 is the SUMMIT — also safe, and crossing into it
        finishes the run.
      - The other nine lanes of a block are a TIER, and each tier has its own
-       character (see TIERS below): a side street gives you 1.8s windows at
-       1.6 lanes/sec, the final stretch gives you 0.52s windows at 4.8. Each
-       tier *starts* harder than the one before it ended, so crossing an
-       island is always stepping up into nastier traffic.
+       character (see TIERS below): the side street gives you ~0.72s windows at
+       2.9 lanes/second, the final stretch gives you ~0.40s windows at 6.2-6.85.
+       Every tier is a step up in speed, convoy size and vehicle size, and the
+       pool of clear windows ratchets down block by block — with a short
+       breather as you step onto each median, which is what the grass is for.
+       The step out of the ISLAND 10 median is the sharpest of the whole road:
+       the window profile drops from 0.72-0.64s to 0.58-0.52s, the convoys grow
+       from 4-5 to 5-6, the traffic jumps most of a lane per second, and the
+       pocket you land in shortens. It is the wall the machine is built around
+       — and it sits exactly where the first real bankable rung does. Measured
+       (DEV-NOTES.md): a perfect planner clears that one block 29% of the time,
+       against a clean streak through the side street.
+
+   THE MEDIAN IS ONLY CLEAR FOR A MOMENT. A median (and the verge) shelters
+   the frog for FROG_CONST.restSec seconds and then the road sweeps it — stop
+   for too long and you are flattened anyway. This is the load-bearing rule of
+   the whole machine, and it is not decoration: the traffic model below is
+   deterministic and fully on screen, so without a clock a patient player can
+   stand on the verge for ever, watch the traffic until every lane lines up,
+   and stroll to island 20 having taken no real risk at all. The clock is what
+   turns the machine from a patience puzzle into a timed crossing. DEV-NOTES.md
+   has the headless god planner that measures exactly how much the clock buys
+   the house (the "god reach" curve).
 
    A lane is an endless, *irregular* stream of vehicles: it holds a handful
    of cars with randomly-sized widths and randomly-sized gaps, and that whole
    little convoy repeats spatially every `loopLen`. Because the gaps vary, the
    lane does not tick like a metronome -- some windows are wide, some are
    tight. What is guaranteed is the *minimum* window: `cw` is the least amount
-   of daylight the frog's column ever gets, and it is the difficulty dial.
+   of daylight the frog's column ever gets, and it is the difficulty dial. A
+   faster lane at the same `cw` is mostly cosmetic: the cars are further apart,
+   so the convoy takes the same time to come round again.
 
    The frog's own collision box is deliberately tiny (0.28 wide) so a lane
    reads as "wide open" whenever it genuinely is. Everything the player must
@@ -40,18 +61,69 @@ export const FROG_CONST = {
   frogHalfW: 0.14,    // horizontal collision half-width, lane units (forgiving vs sprite)
   frogHalfH: 0.32,    // vertical collision half-height, lane units
   startMult: 1.0,     // you begin safe on the verge, exactly even
-  perHop: 0.05,       // base gain for every lane crossed
-  perHopStep: 0.01,   // each 10-lane block widens the rungs by this much
+  // ---- the payout ladder (see `multFor`) --------------------------------
+  // THERE ARE TEN RUNGS, ONE PER ISLAND, AND YOU CAN ONLY BANK ON STANDING
+  // GRASS. Banking anywhere else is a money printer: the landing spot is a
+  // free choice, so "hop into one lane and take x1.00" would be a guaranteed
+  // even-money exit, and "bank on the deepest lane I can legally reach" would
+  // cash every intermediate rung. Restricting the cash-out to the ten medians
+  // kills both, and turns every island into a real push-or-bank decision.
+  // Rung i is what a run banked at lane 10*i pays.
+  //
+  // THE DOCTRINE: no strategy of any kind may beat `rtp`. A strategy is a rule
+  // that decides, on each bankable island, whether to bank or push on, so the
+  // best any strategy can do is the best *banking schedule* -- and a banking
+  // schedule is a partition of the run's outcomes by the deepest island
+  // reached. If P_j is the chance a perfect player reaches island j (P_11 = 0)
+  // then the schedule that banks everywhere yields
+  //
+  //     EV = SUM_j (P_j - P_j+1) x rung_j   <=   rtp
+  //
+  // and since banking earlier is just another schedule, EVERY strategy is
+  // bounded by that maximum. Paying per lane, by contrast, has no such bound:
+  // the god's per-lane reach stays high forever, so a per-lane paytable is a
+  // printer. The ten rungs exist so the left side has only ten terms, and the
+  // rungs are fitted (headlessly, with a 99% upper bound on the god's reach)
+  // so that SUM never crosses rtp. That is the anti-farming proof.
+  //
+  // (The old note here claimed rung_i ~= rtp / P_i. That is NOT the bound --
+  // it is far too generous, because it would allow every island to return rtp
+  // *simultaneously* on the same branch. DEV-NOTES.md derives the correct one
+  // and prints the fitted ladder.)
+  //
+  // The shape that follows from the bound: the ladder's early rungs carry
+  // almost all the budget (they own most of the probability mass), so rung 1
+  // is near rtp / P_1 and the deep rungs can only be paid out of the thin
+  // tail of mass that dies before them. A big top rung is affordable exactly
+  // when the god's deep reach is measured tightly enough to bound it.
+  ladderRungs: [1.25, 1.35, 1.50, 1.75, 2.25, 3.50, 6.00, 12.00, 25.00, 50.00],
+  ladderCap: 1000,    // never advertise more than this (keep == maxWinMult in main.pjs)
+  rtp: 0.90,          // the return a *perfect* planner is held to (documentation only)
   roadW: 7,           // visible road width, lane units
   frogX: 3.5,         // the frog's fixed column
   maxLanes: 101,      // lanes 1..100 are crossable; 101 is the far kerb
   summit: 100,        // crossing lane 100 completes the run
   islandEvery: 10,    // lanes 10,20,...,100 are traffic-free safe islands
-  cwFloor: 0.85,      // HUD reference when a lane has no meaningful window
+  cwFloor: 0.9,       // HUD reference when a lane has no meaningful window
+  // How long a median (or the verge) shelters the frog. When it runs out the
+  // road sweeps the frog and the stake is gone. This is the single biggest
+  // difficulty dial in the machine: it is what makes the run a timed crossing
+  // instead of a patience puzzle. 3.0s is just over the pure hop time of a
+  // block (nine hops plus settles = 2.9s), so a player has to read the traffic
+  // at a glance and go -- there is no standing on a median until the whole
+  // road lines up. The sweep clock is also what keeps a *perfect* player in
+  // check, so the ladder's budget (see `ladderRungs`) is set against it: raise
+  // this and the god's reach rises with it, and the ladder must come down.
+  restSec: 3.0,
   // how long the road holds traffic back (a safe pocket) after each landing.
-  // Every landing buys a genuine safe pocket; it shrinks as you get deeper,
-  // which is what keeps a patient player honest.
-  blockHi: 1.75, blockDecay: 0.0125, blockMin: 0.5,
+  // Every landing buys a genuine safe pocket; it shrinks as you get deeper --
+  // per lane AND per tier, so every island you cross costs you pocket as well
+  // as window. It is the only moment a live lane stops for you, so it is the
+  // budget a frog has to pick the next window. The floor is load-bearing: the
+  // frog needs 0.164s to climb out of its own lane, so a pocket shorter than
+  // ~0.26s stops being an escape hatch and the deep road becomes a death trap
+  // that not even a perfect planner crosses (measured -- see DEV-NOTES.md).
+  blockHi: 0.34, blockDecay: 0.0015, blockTierStep: 0.010, blockMin: 0.26,
   // the frog starts mid-road with this much daylight before the first car arrives
   initLo: 0.7, initHi: 1.4,
   scan: 14,
@@ -65,38 +137,48 @@ export const FROG_CONST = {
      speed   lanes/second        cw    guaranteed clear window (seconds)
      cars    vehicles per convoy carW  vehicle width (lanes)
      gapVar  extra gap, x minGap speedJ lane-to-lane speed spread
-*/
+
+   THE ISLAND 10 WALL. The step out of the side street is the only one in the
+   road that changes the *character* of the traffic: the guaranteed window
+   profile falls from 0.72-0.64s to 0.58-0.52s, the convoys go from 4-5
+   vehicles to 5-6, and the traffic speeds up by most of a lane per second.
+   Every later step is a smaller fraction of what came before, which is what
+   makes the first island the machine's real gatekeeper -- and it is
+   deliberately the gatekeeper, because the ladder only starts paying there.
+   These are the tiers a headless sweep (DEV-NOTES.md, "the tier sweep") chose:
+   t1 is a touch faster than the original side street, and the island-10 wall
+   is the measured sharpest step in the road. */
 export const TIERS = [
   { n: 1,  name: "SIDE STREET",     accent: "#5cf39a",
-    speed: [1.55, 1.95], speedJ: 0.10, cw: [1.82, 1.64], cwJ: 0.05,
-    cars: [2, 2], carW: [0.85, 1.15], gapVar: [0.55, 0.72] },
+    speed: [2.90, 3.50], speedJ: 0.15, cw: [0.72, 0.64], cwJ: 0.036,
+    cars: [4, 5], carW: [1.00, 1.35], gapVar: [0.76, 0.92] },
   { n: 2,  name: "DOWNTOWN",        accent: "#7dd3a0",
-    speed: [2.05, 2.45], speedJ: 0.14, cw: [1.58, 1.44], cwJ: 0.05,
-    cars: [2, 3], carW: [0.95, 1.35], gapVar: [0.70, 0.88] },
+    speed: [3.60, 4.20], speedJ: 0.17, cw: [0.58, 0.52], cwJ: 0.032,
+    cars: [5, 6], carW: [1.15, 1.60], gapVar: [0.62, 0.78] },
   { n: 3,  name: "THE FREEWAY",     accent: "#8fc9ff",
-    speed: [2.55, 2.95], speedJ: 0.16, cw: [1.40, 1.28], cwJ: 0.045,
-    cars: [3, 4], carW: [1.20, 1.95], gapVar: [0.85, 1.02] },
+    speed: [4.00, 4.60], speedJ: 0.18, cw: [0.55, 0.51], cwJ: 0.030,
+    cars: [5, 6], carW: [1.20, 1.75], gapVar: [0.60, 0.74] },
   { n: 4,  name: "RUSH HOUR",       accent: "#ffd23f",
-    speed: [3.05, 3.45], speedJ: 0.18, cw: [1.24, 1.14], cwJ: 0.045,
-    cars: [4, 5], carW: [0.95, 1.55], gapVar: [1.00, 1.18] },
+    speed: [4.40, 5.00], speedJ: 0.20, cw: [0.52, 0.49], cwJ: 0.028,
+    cars: [6, 7], carW: [1.10, 1.70], gapVar: [0.56, 0.70] },
   { n: 5,  name: "THE EXPRESSWAY",  accent: "#ff9f43",
-    speed: [3.55, 3.95], speedJ: 0.20, cw: [1.10, 1.00], cwJ: 0.04,
-    cars: [4, 5], carW: [1.10, 1.95], gapVar: [1.10, 1.28] },
+    speed: [4.80, 5.40], speedJ: 0.22, cw: [0.50, 0.47], cwJ: 0.026,
+    cars: [6, 7], carW: [1.15, 1.90], gapVar: [0.52, 0.66] },
   { n: 6,  name: "NIGHT CROSSING",  accent: "#8ea2ff",
-    speed: [3.85, 4.15], speedJ: 0.22, cw: [0.96, 0.88], cwJ: 0.04,
-    cars: [4, 6], carW: [1.00, 1.80], gapVar: [1.20, 1.38] },
+    speed: [5.20, 5.80], speedJ: 0.24, cw: [0.48, 0.45], cwJ: 0.024,
+    cars: [6, 7], carW: [1.15, 2.00], gapVar: [0.48, 0.62] },
   { n: 7,  name: "THE INTERCHANGE", accent: "#c58bff",
-    speed: [3.95, 4.30], speedJ: 0.55, cw: [0.84, 0.78], cwJ: 0.035,
-    cars: [5, 6], carW: [1.10, 2.00], gapVar: [1.30, 1.50] },
+    speed: [5.50, 6.10], speedJ: 0.26, cw: [0.46, 0.43], cwJ: 0.022,
+    cars: [7, 8], carW: [1.20, 2.05], gapVar: [0.44, 0.58] },
   { n: 8,  name: "STORM FRONT",     accent: "#63d7ff",
-    speed: [4.15, 4.45], speedJ: 0.30, cw: [0.74, 0.69], cwJ: 0.035,
-    cars: [5, 6], carW: [1.15, 2.10], gapVar: [1.42, 1.62] },
+    speed: [5.80, 6.40], speedJ: 0.28, cw: [0.45, 0.42], cwJ: 0.022,
+    cars: [7, 8], carW: [1.20, 2.10], gapVar: [0.40, 0.54] },
   { n: 9,  name: "THE GAUNTLET",    accent: "#ff7a6b",
-    speed: [4.30, 4.60], speedJ: 0.34, cw: [0.66, 0.61], cwJ: 0.03,
-    cars: [5, 7], carW: [1.20, 2.20], gapVar: [1.52, 1.72] },
+    speed: [6.00, 6.60], speedJ: 0.30, cw: [0.44, 0.41], cwJ: 0.021,
+    cars: [7, 8], carW: [1.25, 2.15], gapVar: [0.37, 0.51] },
   { n: 10, name: "FINAL STRETCH",   accent: "#ffe08a",
-    speed: [4.45, 4.85], speedJ: 0.38, cw: [0.58, 0.52], cwJ: 0.03,
-    cars: [6, 7], carW: [1.25, 2.30], gapVar: [1.60, 1.85] },
+    speed: [6.20, 6.85], speedJ: 0.32, cw: [0.43, 0.40], cwJ: 0.020,
+    cars: [8, 9], carW: [1.30, 2.20], gapVar: [0.34, 0.48] },
 ];
 
 /* Weather per tier: a night wash over the whole road, and a rain overlay.
@@ -153,7 +235,8 @@ export function tierName(lane) { return TIERS[tierOf(lane)].name; }
 
 export function isSummit(lane) { return Math.floor(Number(lane) || 0) >= FROG_CONST.summit; }
 
-/* Every tenth lane is a rest stop: no traffic, no collisions, no clock. */
+/* Every tenth lane is a rest stop: no traffic, no collisions -- but it is
+   still on the clock (see `restSecFor`). */
 export function isSafeLane(lane) {
   const C = FROG_CONST;
   const i = Math.floor(Number(lane));
@@ -170,12 +253,20 @@ export function nextIsland(lane) {
   return Math.min(C.summit, n <= l ? n + C.islandEvery : n);
 }
 
+/* You can only cash out on standing grass: the verge or one of the ten
+   medians. Everywhere else the only move is to push on. */
+export function isBankable(lane) {
+  const i = Math.floor(Number(lane));
+  if (!Number.isFinite(i) || i < 0) return false;
+  return i === 0 || isSafeLane(i);
+}
+
 export function atmosphereFor(lane) { return ATMO[tierOf(lane)] || ATMO[0]; }
 
 /* ---------- lane construction ------------------------------------------- */
 
-/* A safe island: no convoy, no clock, and a little scenery for the renderer
-   to draw (generated here so it is deterministic per world seed). */
+/* A safe island: no convoy, and a little scenery for the renderer to draw
+   (generated here so it is deterministic per world seed). */
 function makeIsland(index, r) {
   const C = FROG_CONST;
   const kinds = ["tree", "bush", "flower", "pond", "lamp", "tree", "bush", "flower"];
@@ -215,7 +306,11 @@ export function makeLane(index, rng = Math.random) {
   const w = clamp01((index - 1 - t * C.islandEvery) / (C.islandEvery - 1));
 
   const speed = Math.max(0.6, lerp(prof.speed[0], prof.speed[1], w) + (r() - 0.5) * prof.speedJ);
-  const cw = Math.max(0.34, lerp(prof.cw[0], prof.cw[1], w) + (r() - 0.5) * prof.cwJ);
+  // The floor keeps a lane from ever becoming a solid wall: the frog needs
+  // 0.164s of daylight to cross a lane, so anything at or under that would be
+  // an impassable barrier (and the whole ladder beyond it dead). 0.24 leaves
+  // the deepest tier enough room to be *barely* crossable.
+  const cw = Math.max(0.24, lerp(prof.cw[0], prof.cw[1], w) + (r() - 0.5) * prof.cwJ);
   // spatial gap that yields at least `cw` seconds of daylight at this speed
   const minGap = cw * speed;
   const count = prof.cars[0] + Math.floor(r() * (prof.cars[1] - prof.cars[0] + 1));
@@ -364,7 +459,9 @@ export function aimMargin(lane, fx, halfW, margin) {
 /* The hop is hit-tested against the frog's actual y span, so these are the
    two moments that decide whether a hop is safe: by `leaveCurrent` the frog
    has climbed out of its old lane, and from `enterNext` it is inside the new
-   one. Between them it is over the paint and belongs to both. */
+   one. Between them it is over the paint and belongs to both -- which is why
+   a car reaching the column in the first `leaveCurrent` seconds of a hop
+   still flattens the frog. */
 export function hopTiming() {
   const C = FROG_CONST;
   return {
@@ -386,35 +483,85 @@ export function overlappedLanes(y, halfH, maxLane) {
 
 /* ---------- payouts ------------------------------------------------------ */
 
-/* How much one lane is worth. The rungs widen one notch per block, so the
-   ladder stays a straight line *inside* a tier (you always know what the next
-   hop pays) but each new tier climbs steeper than the last:
+/* THE LADDER IS TEN RUNGS: one per island, and only islands (and the verge)
+   are bankable.
 
-     lanes   1-10   11-20   21-30  ...  91-100
-     per lane +0.05  +0.06   +0.07  ... +0.14
+        lane   0    10     20     30     40     50     60     70     80     90    100
+        mult  x1.00 x1.25  x1.35  x1.50  x1.75  x2.25  x3.50  x6.00 x12.00 x25.00 x50.00
 
-     lane   0     10     20     30     40     50     60     70     80     90    100
-     mult  x1.00 x1.50  x2.10  x2.80  x3.60  x4.50  x5.50  x6.60  x7.80  x9.10 x10.50
-*/
-export function perHopFor(lane) {
-  const C = FROG_CONST;
-  return C.perHop + tierOf(Math.max(1, lane)) * C.perHopStep;
-}
+   Why it looks like that:
 
-export function multFor(depth) {
+     - LANE 0 IS A REFUND, NOT A RUNG. Banking on the verge hands the stake
+       straight back (x1.00), so entering the machine costs nothing and the
+       only way to make money is to cross.
+     - THE LADDER IS FITTED TO THE BOUND, NOT TO A PER-ISLAND IDENTITY. See
+       the note above `ladderRungs`: what has to hold is
+       SUM_j (P_j - P_j+1) x rung_j <= rtp, where P_j is the measured chance
+       that a perfect player reaches island j. That single inequality caps
+       every possible stopping rule at once, because the god banking at every
+       island IS the best rule available.
+     - IT PUSHES YOU OFF THE FIRST ISLAND. rung 1 (x1.25) is only a little
+       above even, and island 2 (x1.35) is where the real step is: the side
+       street is the one block a good player can clear most of the time, so
+       that is where the budget has to be spent, and it is not enough there to
+       make standing still attractive. Taking the island-10 wall at speed
+       starts paying real money.
+     - THE TOP END IS PAID FOR OUT OF THE TAIL, NOT OUT OF THIN AIR. A x50
+       summit is only affordable because the god's chance of reaching island
+       100 is bounded below 1.8 parts in ten thousand; the deep rungs are
+       sized from a 99%-upper-bound measurement, so the ladder survives even
+       an unlucky calibration re-run.
+     - THE RUNG YOU ARE HOLDING IS THE LAST ISLAND YOU REACHED. Mid-block you
+       are carrying the rung you already banked past, and the next bankable
+       number is the island ahead: the HUD shows both, and the gap between
+       them is the risk you are being paid to take.
+     - NOTHING IS LINEAR AND NOTHING COMPOUNDS PER LANE. Paying per lane is a
+       printer because the god's reach per lane stays high forever; paying
+       only at islands keeps the ten rungs far enough apart that each one can
+       be set from the measured chance of getting there.
+
+   The cap exists so a summit run cannot advertise a number the platform would
+   refuse to pay: ladderCap must equal maxWinMult in main.pjs. */
+export function islandIndexAt(depth) {
   const C = FROG_CONST;
   const d = Math.max(0, Math.min(C.summit, Math.floor(Number(depth) || 0)));
-  let m = C.startMult;
-  for (let i = 1; i <= d; i++) m += perHopFor(i);
-  return m;
+  return Math.min(C.ladderRungs.length, Math.floor(d / C.islandEvery));
 }
 
+export function rungFor(islandIndex) {
+  const C = FROG_CONST;
+  const i = Math.floor(Number(islandIndex) || 0);
+  if (i <= 0) return C.startMult;
+  return Math.min(C.ladderCap, C.ladderRungs[Math.min(C.ladderRungs.length - 1, i - 1)]);
+}
+
+/* the multiplier a run banked at `depth` pays (the last island at or before
+   it; x1.00 anywhere in the first block) */
+export function multFor(depth) { return rungFor(islandIndexAt(depth)); }
+
+/* the rung the frog is walking towards, for the HUD */
+export function nextIslandRung(depth) { return rungFor(islandIndexAt(depth) + 1); }
+
 /* How long the road blocks traffic in the lane a frog has just landed in.
-   Every landing buys a genuine safe pocket; it shrinks as you get deeper,
-   from 1.75s on the first lane to 0.50s near the summit, which is what keeps
-   a patient player honest. Islands ignore this entirely -- they never lapse. */
+   Every landing buys a genuine safe pocket; it shrinks as you get deeper, and
+   it takes a second hit at every island you cross, so the pocket you get in
+   DOWNTOWN is shorter than any pocket in the side street. With the shipped
+   numbers it runs 0.34s off the verge, 0.32s through the side street, 0.30s
+   at the island-10 wall, and settles onto the 0.26s floor early in block 3.
+   Islands ignore it entirely -- nothing holds traffic back on a median
+   because there is no traffic there. */
 export function blockSecFor(depth) {
   const C = FROG_CONST;
   const d = Math.max(0, depth - 1);
-  return Math.max(C.blockMin, C.blockHi - d * C.blockDecay);
+  const t = tierOf(Math.max(1, depth));
+  const base = C.blockHi - d * C.blockDecay - t * (C.blockTierStep || 0);
+  return Math.max(C.blockMin, base);
+}
+
+/* How long the frog may stand still on the verge or a median before the road
+   sweeps it away. Flat for now (a median deep in the road is no more generous
+   than the verge), but kept as a function so the harness -- and any future
+   tuning -- can vary it per lane. */
+export function restSecFor(lane) {
+  return FROG_CONST.restSec;
 }

@@ -5,7 +5,7 @@ import { state, saveState, CONFIG } from "../state.js";
 import { sfx } from "../audio.js";
 import {
   FROG_CONST, TIERS, mulberry32, makeLane, stepLane, laneCars, laneHit, timeUntilHit,
-  clearFor, multFor, perHopFor, overlappedLanes, blockSecFor,
+  clearFor, multFor, nextIslandRung, isBankable, overlappedLanes, blockSecFor, restSecFor,
   tierOf, isSafeLane, isSummit, nextIsland, atmosphereFor,
 } from "./frogger-math.js";
 
@@ -17,15 +17,22 @@ import {
    It starts safe on the verge at x1.00.
 
    The road is ten blocks of ten lanes. Every tenth lane is a
-   SAFE ISLAND -- a traffic-free grass median where nothing can
-   touch you and you can rest as long as you like. Lane 100 is
-   the summit: crossing it finishes the run.
+   SAFE ISLAND -- a traffic-free grass median. Lane 100 is the
+   summit: crossing it finishes the run.
+
+   THE ROAD SWEEPS YOU. A median is only clear for a moment:
+   `restSec` seconds after you land (and the same clock on the
+   verge) the road sweeps the frog away and the stake is gone.
+   This is the rule that makes the machine a timed crossing
+   instead of a patience puzzle -- without it a player could
+   stand on a median and wait for a perfect alignment.
 
    The nine real lanes in each block are a TIER, and every tier
    is a step nastier than the one before it: faster traffic,
    tighter guaranteed windows, longer convoys, bigger vehicles,
-   and (from the sixth block on) night, drizzle and storms.
-   The safe pocket you get for landing also shortens as you go.
+   and (from the sixth block on) night, drizzle and storms. The
+   windows ratchet down block by block with a short breather on
+   each median. The safe pocket you get for landing shortens too.
 
    Traffic is irregular: each lane is a little convoy of cars
    with randomly-sized widths and randomly-sized gaps, looping
@@ -36,7 +43,12 @@ import {
    Landing in a gap makes the road BLOCK that lane behind you:
    traffic in it holds still and you get a short safe pocket to
    stand in, so stopping is never free. Hopping while a car is
-   coming still flattens you mid-air, and banking is always safe.
+   coming still flattens you mid-air.
+
+   BANKING ONLY WORKS ON STANDING GRASS -- the verge and the ten
+   medians. Anywhere else there is no way out but forward: the
+   landing spot is a free choice, so banking on any lane would
+   let a player cash a rung after one lane of risk.
 
    The traffic model lives in frogger-math.js and can be
    re-simulated headlessly.
@@ -65,6 +77,16 @@ const SPLAT_LINES = [
   "You were one lane from the island.",
 ];
 
+/* ...and one for the sweep, which is the other way the road gets you */
+const SWEPT_LINES = [
+  "The median is a loan, not a gift.",
+  "You had three seconds. You used four.",
+  "Standing still is the one thing the road won't allow.",
+  "The gap was there. You were busy admiring it.",
+  "Grass in this city comes with a meter.",
+  "Somewhere, the house just added another wing.",
+];
+
 export default {
   id: "frogger",
   name: "Frogger Gamble",
@@ -72,17 +94,18 @@ export default {
   action: "CROSS THE ROAD",
   canIdle: false,
   minBet: 1,
-  blurb: "A frog, a 100-lane road, and one button. Ten brutal blocks, a safe island every tenth lane, and a summit worth \u00D710.50.",
+  blurb: "A frog, a 100-lane road, and one button. Ten brutal blocks, a median that only holds for a moment, and a summit worth \u00D7" + multFor(100).toFixed(0) + ".",
   payoutNote: () =>
-    "You start safe on the verge at <b>\u00D71.00</b>. The road is <b>100 lanes</b> in ten blocks of ten, and " +
-    "every tenth lane (<b>10, 20, 30 \u2026 100</b>) is a <b>SAFE ISLAND</b> \u2014 no traffic, nothing can touch you, " +
-    "rest as long as you like. The nine lanes between islands are a tier, and each tier hits harder than the last. " +
-    "Rungs widen a notch per block: <b>+0.05</b> a lane in the first block, <b>+0.14</b> a lane in the last \u2014 " +
-    "<b>\u00D71.50</b> at lane 10, <b>\u00D74.50</b> at 50 and <b>\u00D710.50</b> on the summit. " +
-    "Traffic is irregular and you can watch it coming: if one reaches your column you're flattened and the whole " +
-    "stake is lost. <b>CROSS</b> to hop, <b>BANK</b> to keep what you've got. Land in a gap and the road " +
-    "<b>blocks the lane behind you</b> \u2014 but that pocket gets shorter the deeper you are. Jump while a car " +
-    "is coming and you get splatted.",
+    "You start on the verge at <b>\u00D7" + C.startMult.toFixed(2) + "</b>. The road is <b>100 lanes</b> in ten blocks of ten, and " +
+    "every tenth lane (<b>10, 20, 30 \u2026 100</b>) is a <b>SAFE ISLAND</b> \u2014 no traffic, nothing can touch you " +
+    "there. But the road only waits <b>" + C.restSec.toFixed(1) + "s</b> before it <b>sweeps you off the grass</b>, so the whole run is a " +
+    "timed crossing: read the traffic, move, don't dawdle. <b>You can only bank on grass</b> \u2014 the verge and " +
+    "the islands: <b>\u00D7" + multFor(10).toFixed(2) + "</b> on the first island, then <b>\u00D7" + multFor(20).toFixed(2) + "</b>, <b>\u00D7" + multFor(30).toFixed(2) + "</b>, <b>\u00D7" + multFor(40).toFixed(2) + "</b>, " +
+    "<b>\u00D7" + multFor(50).toFixed(2) + "</b>, <b>\u00D7" + multFor(60).toFixed(2) + "</b>, <b>\u00D7" + multFor(70).toFixed(2) + "</b>, <b>\u00D7" + multFor(80).toFixed(2) + "</b>, <b>\u00D7" + multFor(90).toFixed(2) + "</b> \u2026 and <b>\u00D7" + multFor(C.summit).toFixed(2) + "</b> on the summit. " +
+    "The step off island 10 is the wall the machine is built around: the windows shrink, the convoys grow and the " +
+    "traffic jumps in speed. Traffic is irregular and you can watch it coming: if one reaches your column you're " +
+    "flattened and the whole stake is lost. <b>CROSS</b> to hop, <b>BANK</b> on an island to keep what you've got. " +
+    "Land in a gap and the road <b>blocks the lane behind you</b> \u2014 but that pocket gets shorter the deeper you are.",
 
   create(app) {
     if (!state.frogger || !Number.isFinite(state.frogger.bestDepth)) {
@@ -97,13 +120,18 @@ export default {
       C.blockHi = CONFIG.froggerBlockSec;
       C.blockMin = Math.min(C.blockMin, C.blockHi);
     }
+    // ...and the sweep clock is the other root tunable: how long the verge and
+    // the medians shelter you before the road takes the stake
+    if (Number.isFinite(CONFIG.froggerRestSec) && CONFIG.froggerRestSec > 0) {
+      C.restSec = CONFIG.froggerRestSec;
+    }
 
     const canvas = el("canvas", { class: "frogger-canvas" });
     const statusEl = el("div", { class: "frogger-status", text: "PRESS CROSS THE ROAD TO PLAY" });
 
     const hudMult = el("span", { text: "1.00" });
     const hudLanes = el("span", { text: "1" });
-    const hudNext = el("span", { text: "1.05" });
+    const hudNext = el("span", { text: multFor(10).toFixed(2) });
     const hudIsland = el("span", { text: "10" });
     const hudBest = el("span", { text: "1.00" });
     const dangerFill = el("i");
@@ -156,7 +184,7 @@ export default {
 
     const root = stageShell(
       "Frogger Gamble",
-      "Cross the road one lane at a time. Every lane pays more than the last \u2014 the cars are right there, so it's your call when to go.",
+      "Cross the road one lane at a time. Only the medians pay \u2014 the cars are right there, and the road only waits three seconds, so it's your call when to go.",
       { info: infoBtn(() => openInfoCard()) },
       el("div", { class: "frogger-wrap" },
         el("div", { class: "slot-cabinet frogger-cab" },
@@ -171,7 +199,7 @@ export default {
               el("span", { class: "v gold", text: "\u00D7" }, hudMult)),
             el("div", { class: "ahud" }, el("span", { class: "k", text: "Lanes crossed" }),
               el("span", { class: "v" }, hudLanes, el("em", { class: "of", text: "/ " + C.summit }))),
-            el("div", { class: "ahud" }, el("span", { class: "k", text: "Next lane" }),
+            el("div", { class: "ahud" }, el("span", { class: "k", text: "Next rung" }),
               el("span", { class: "v" }, el("span", { text: "\u00D7" }), hudNext)),
             el("div", { class: "ahud" }, el("span", { class: "k", text: "Next island" }),
               el("span", { class: "v safe" }, el("span", { class: "pin", text: "\u25C6" }), hudIsland)),
@@ -202,6 +230,7 @@ export default {
     let phase = "idle";        // idle | ready | run | done
     let readyT = 0, fade = 1, doneT = 0;
     let blockT = 0;            // seconds of safe pocket left in the lane we're standing in
+    let deathKind = "splat";   // what killed the frog, for the post-mortem card
     let camY = 0;
     let depth = 0;
     let resolveRun = null;
@@ -247,6 +276,13 @@ export default {
     /* ---------- hud ---------- */
     function currentMult() { return multFor(depth); }
 
+    /* How much of the sweep clock the frog has burned on the ground it is
+       standing on. `frog.rest` counts from the landing and the settle dead-time
+       is not the player's fault, so the clock runs from the first moment they
+       could actually have moved -- exactly what the headless god planner
+       assumes, which is what keeps the shipped game inside the ladder's bound. */
+    function sweepUsed() { return Math.max(0, frog.rest - C.settleSec); }
+
     /* Which block of ten are we in, how full is each block's bar, and which
        island is next. Safe islands get their own flag so the track lights up
        the moment the frog is standing on one. */
@@ -273,44 +309,59 @@ export default {
     }
 
     function refreshHud() {
-      const m = phase === "run" || phase === "done" ? currentMult() : C.startMult;
+      const running = phase === "run" || phase === "done";
+      const m = running ? currentMult() : C.startMult;
+      const canBank = phase === "run" && isBankable(frog.lane);
       hudMult.textContent = m.toFixed(2);
+      // the "Bank now" cell is only live when the frog is on standing grass
+      const bankCell = hudMult.parentElement && hudMult.parentElement.parentElement;
+      if (bankCell) {
+        bankCell.classList.toggle("locked", running && !canBank);
+        bankCell.classList.toggle("ready", canBank);
+        bankCell.title = canBank ? "Bank here to take \u00D7" + m.toFixed(2)
+          : "Banking only works on the verge or an island";
+      }
       hudLanes.textContent = String(depth);
-      hudNext.textContent = multFor(depth + 1).toFixed(2);
+      hudNext.textContent = nextIslandRung(depth).toFixed(2);
       hudBest.textContent = (state.frogger.bestMult || C.startMult).toFixed(2);
       refreshTierUI();
+      if (phase === "run") bankBtn.disabled = !canBank;
     }
     function refreshDanger() {
       if (phase !== "run") {
         dangerFill.style.width = "0%";
-        dangerLabel.textContent = phase === "idle" ? "PRESS PLAY" : "ROAD CLEAR";
         dangerFill.className = "";
+        dangerLabel.textContent = phase === "idle" ? "PRESS PLAY" : "ROAD CLEAR";
         return;
       }
-      const standing = frog.state === "rest" && isSafeLane(frog.lane);
       const next = ensureLane(frog.lane + 1);
-      const nextIsland = isSafeLane(frog.lane + 1);
-      // An island never lapses, so the bar sits full green and reads as a rest
-      // stop. Standing on one, the label still counts the window in the lane
-      // above down, so you know when it is worth leaving.
-      if (standing || nextIsland) {
+      const nextSafe = isSafeLane(frog.lane + 1);
+
+      // 1. ON GRASS (the verge or a median): the bar is the SWEEP CLOCK. It
+      //    counts down the seconds before the road sweeps the frog away and
+      //    the stake with it, which is the only timer that matters while you
+      //    are standing still.
+      if (frog.state === "rest" && (frog.lane === 0 || isSafeLane(frog.lane))) {
+        const limit = Math.max(0.001, restSecFor(frog.lane));
+        const left = Math.max(0, limit - sweepUsed());
+        dangerFill.style.width = (clamp(left / limit, 0, 1) * 100).toFixed(1) + "%";
+        dangerFill.className = left < 0.6 ? "hot" : left < 1.4 ? "warm" : "safe";
+        dangerLabel.textContent = (isSummit(frog.lane) ? "SUMMIT \u00B7 " : "")
+          + "SWEPT IN " + left.toFixed(1) + "s";
+        return;
+      }
+
+      // 2. HOPPING ONTO A MEDIAN: the one hop that cannot kill you, so the
+      //    bar reads full green and gives you the good news.
+      if (frog.state === "hop" && nextSafe) {
         dangerFill.style.width = "100%";
         dangerFill.className = "safe";
-        if (standing) {
-          const w = timeUntilHit(next, C.frogX, C.frogHalfW);
-          dangerLabel.textContent = !Number.isFinite(w) || w <= 0.001
-            ? (isSummit(frog.lane) ? "THE SUMMIT" : "SAFE ISLAND")
-            : w > 0.6 ? "SAFE \u00B7 WINDOW OPEN"
-              : "SAFE \u00B7 " + w.toFixed(2) + "s";
-        } else {
-          dangerLabel.textContent = isSummit(frog.lane + 1) ? "SUMMIT AHEAD" : "SAFE ISLAND AHEAD";
-        }
+        dangerLabel.textContent = isSummit(frog.lane + 1) ? "TO THE SUMMIT" : "TO ISLAND " + (frog.lane + 1);
         return;
       }
-      // While the pocket holds you are untouchable where you stand: the bar
-      // counts the pocket down. Once it lapses the frog's own lane is live
-      // again, and the bar counts whichever of (own lane, lane above) will
-      // reach the column first.
+
+      // 3. THE POCKET: while it holds you are untouchable where you stand, so
+      //    the bar counts the pocket down.
       if (frog.state === "rest" && blockT > 0) {
         const total = Math.max(0.001, blockSecFor(Math.max(1, frog.lane)));
         dangerFill.style.width = (clamp(blockT / total, 0, 1) * 100).toFixed(1) + "%";
@@ -318,14 +369,21 @@ export default {
         dangerLabel.textContent = "SAFE " + blockT.toFixed(1) + "s";
         return;
       }
-      const t = frog.state === "hop"
-        ? timeUntilHit(next, C.frogX, C.frogHalfW)
-        : Math.min(timeUntilHit(lanes[frog.lane], C.frogX, C.frogHalfW), timeUntilHit(next, C.frogX, C.frogHalfW));
-      const ref = Math.max(C.cwFloor, Number.isFinite(next && next.cw) ? next.cw : C.cwFloor);
+
+      // 4. LIVE TRAFFIC: whichever of (the lane under you, the lane above) will
+      //    reach the column first. With a median above, the lane under you is
+      //    the only live thing left, so that is what the bar counts.
+      const own = timeUntilHit(lanes[frog.lane], C.frogX, C.frogHalfW);
+      const above = nextSafe ? Infinity : timeUntilHit(next, C.frogX, C.frogHalfW);
+      const t = frog.state === "hop" ? above : Math.min(own, above);
+      const srcLane = t === above ? next : lanes[frog.lane];
+      const ref = Math.max(C.cwFloor, Number.isFinite(srcLane && srcLane.cw) ? srcLane.cw : C.cwFloor);
       const f = clamp(t / ref, 0, 1);
       dangerFill.style.width = (f * 100).toFixed(1) + "%";
       dangerFill.className = t < 0.3 ? "hot" : t < 0.6 ? "warm" : "";
-      const lead = frog.state === "rest" ? "MOVE! CAR IN " : "CAR IN ";
+      const lead = frog.state === "rest"
+        ? (nextSafe ? (isSummit(frog.lane + 1) ? "SUMMIT \u00B7 HOP IN " : "ISLAND \u00B7 HOP IN ") : "MOVE! CAR IN ")
+        : "CAR IN ";
       dangerLabel.textContent = t <= 0.001 ? "BLOCKED!" : lead + t.toFixed(2) + "s";
     }
 
@@ -334,6 +392,7 @@ export default {
       frog.lane = 0; frog.y = 0; frog.from = 0; frog.to = 1; frog.t = 0;
       frog.rest = 0; frog.hop = 0; frog.arc = 0; frog.state = "rest"; frog.squash = 0; frog.deadLane = 0;
       depth = 0; camY = 0; floaters = []; banner = null; shake = 0; queued = null; blockT = 0;
+      deathKind = "splat";
       atmo = { night: 0, rain: 0 };
     }
 
@@ -342,14 +401,14 @@ export default {
       // first lane is a crossing the player has to choose, not a free step
       frog.lane = 0; frog.y = 0; frog.from = 0; frog.to = 0; frog.t = 0;
       frog.state = "rest"; frog.rest = C.settleSec; frog.hop = 0; frog.arc = 0;
-      depth = 0; camY = 0; queued = null; blockT = 0;
+      depth = 0; camY = 0; queued = null; blockT = 0; deathKind = "splat";
       phase = "run";
       crossBtn.disabled = false;
-      bankBtn.disabled = false;
       hideDeathCard();
       sfx.ready();
       statusEl.className = "frogger-status";
-      statusEl.textContent = "ON THE VERGE \u2014 " + TIERS[0].name + " \u00B7 first island at lane 10";
+      statusEl.textContent = "ON THE VERGE \u2014 " + TIERS[0].name + " \u00B7 " +
+        restSecFor(0).toFixed(1) + "s BEFORE THE SWEEP \u00B7 first island at lane 10";
       refreshHud();
       refreshDanger();
     }
@@ -359,17 +418,24 @@ export default {
         depth = frog.lane;
         const island = isSafeLane(depth);
         blockT = island ? 0 : blockSecFor(depth);
-        float(multText(multFor(depth)), frog.y + 0.35, "good");
         sfx.hop();
         if (island) {
+          // Standing grass is the only place the rung moves, so this is the
+          // moment worth shouting about: float the multiplier and say what
+          // banking here is worth before the sweep clock runs out.
+          float(multText(multFor(depth)), frog.y + 0.35, "good");
           sfx.win(1);
           showBanner(isSummit(depth) ? "SUMMIT \u2014 \u00D7" + multFor(depth).toFixed(2) : "ISLAND " + depth, "good", 1.6);
           statusEl.className = "frogger-status won";
           statusEl.textContent = isSummit(depth)
             ? "THE SUMMIT \u2014 all " + C.summit + " lanes"
-            : "SAFE ISLAND " + depth + " \u2014 nothing reaches you here. Next: " +
-              TIERS[Math.min(TIERS.length - 1, tierOf(depth + 1))].name;
+            : "SAFE ISLAND " + depth + " \u00B7 BANK " + multText(multFor(depth)) + " OR PUSH ON \u00B7 " +
+              TIERS[Math.min(TIERS.length - 1, tierOf(depth + 1))].name + " \u00B7 swept in " +
+              restSecFor(depth).toFixed(1) + "s";
         } else {
+          statusEl.className = "frogger-status";
+          statusEl.textContent = "LANE " + depth + " OF " + C.summit + " \u2014 HOLDING " + multText(multFor(depth)) +
+            " \u00B7 banking is only on the grass (island " + nextIsland(depth + 1) + ")";
           const prev = lanes[frog.lane - 1];
           if (prev && frog.lane > 1 && timeWithin(prev, 0.4) && Math.random() < 0.5) sfx.horn();
         }
@@ -402,15 +468,35 @@ export default {
     }
 
     function doBank() {
+      // Banking is only legal on standing grass (the verge or a median). Off
+      // the grass the only move is forward: if you could cash a rung from any
+      // lane, "hop one lane, bank" would be a free even-money exit and a
+      // patient player could bank every rung the moment they reached it.
+      if (!isBankable(frog.lane)) return false;
       sfx.bank();
       float("BANKED " + multText(currentMult()), frog.y + 0.35, "good");
       finish(currentMult(), "bank");
+      return true;
     }
 
     function bank() {
       if (phase !== "run") return;
-      if (frog.state === "rest") { queued = null; doBank(); }
-      else if (frog.state === "hop") queued = "bank";
+      if (frog.state === "rest") {
+        queued = null;
+        if (!doBank()) {
+          // say no out loud instead of silently eating the press
+          sfx.blip();
+          showBanner("BANK ONLY ON GRASS", "bad", 1.0);
+          statusEl.className = "frogger-status";
+          statusEl.textContent = "NO WAY OUT BUT FORWARD \u2014 reach island " + nextIsland(frog.lane + 1) +
+            " to bank " + multText(nextIslandRung(frog.lane)) + ", or the summit for " +
+            multText(multFor(C.summit));
+        }
+      } else if (frog.state === "hop") {
+        // a bank pressed mid-hop only means something when the hop is landing
+        // on grass (i.e. hopping onto a median); anywhere else, drop it
+        if (isBankable(frog.to)) queued = "bank";
+      }
     }
 
     /* ---------- game over ---------- */
@@ -422,14 +508,22 @@ export default {
     }
 
     function showDeathCard() {
-      const lane = frog.deadLane || Math.max(1, depth + 1);
-      deathSub.innerHTML = "FLATTENED ON LANE <b>" + lane + "</b> OF " + C.summit;
+      const swept = deathKind === "swept";
+      const lane = swept ? (frog.deadLane || 0) : (frog.deadLane || Math.max(1, depth + 1));
+      deathEmoji.textContent = swept ? "\u{1F30A}" : "\u{1F4A5}";
+      deathTitle.textContent = swept ? "SWEPT" : "SPLATTED";
+      deathSub.innerHTML = swept
+        ? (lane === 0
+          ? "THE ROAD SWEPT THE FROG OFF THE VERGE"
+          : "SWEPT OFF THE ISLAND AT LANE <b>" + lane + "</b> OF " + C.summit)
+        : "FLATTENED ON LANE <b>" + lane + "</b> OF " + C.summit;
       clear(deathGrid);
       deathGrid.appendChild(deathCell("Lanes crossed", depth + " / " + C.summit));
       deathGrid.appendChild(deathCell("Was holding", depth > 0 ? multText(multFor(depth)) : "\u00D7" + C.startMult.toFixed(2), "gold"));
       deathGrid.appendChild(deathCell("Stake lost", app.fmt(lastStake), "bad"));
       deathGrid.appendChild(deathCell("Best ever banked", multText(state.frogger.bestMult || C.startMult)));
-      deathFlavor.textContent = SPLAT_LINES[Math.floor(Math.random() * SPLAT_LINES.length)];
+      const lines = swept ? SWEPT_LINES : SPLAT_LINES;
+      deathFlavor.textContent = lines[Math.floor(Math.random() * lines.length)];
       const broke = !state.infMoney && state.money < lastStake;
       deathAgain.disabled = broke;
       deathAgain.classList.toggle("broke", broke);
@@ -451,7 +545,8 @@ export default {
       outcome = { multiplier: mult };
       crossBtn.disabled = true;
       bankBtn.disabled = true;
-      if (kind !== "splat") {
+      const dead = kind === "splat" || kind === "swept";
+      if (!dead) {
         const best = state.frogger;
         const m = multFor(depth);
         if (depth > (best.bestDepth || 0) || m > (best.bestMult || 0)) {
@@ -462,10 +557,13 @@ export default {
       }
       refreshHud();
       const lanesWord = " lane" + (depth === 1 ? "" : "s");
-      if (kind === "splat") {
+      if (dead) {
+        const swept = kind === "swept";
         statusEl.className = "frogger-status lost";
-        statusEl.textContent = "SPLAT \u2014 flattened on lane " + (frog.deadLane || frog.lane) + " after " + depth + lanesWord;
-        showBanner("SPLAT!", "bad", 1.4);
+        statusEl.textContent = (swept ? "SWEPT \u2014 the road took the frog off " +
+          (frog.lane === 0 ? "the verge" : "island " + frog.lane)
+          : "SPLAT \u2014 flattened on lane " + (frog.deadLane || frog.lane)) + " after " + depth + lanesWord;
+        showBanner(swept ? "SWEPT!" : "SPLAT!", "bad", 1.4);
         showDeathCard();
         setTimeout(() => { if (!destroyed) sfx.gameOver(); }, 240);
       } else if (kind === "summit") {
@@ -478,19 +576,35 @@ export default {
         statusEl.textContent = "BANKED " + multText(mult) + " \u2014 " + depth + lanesWord + " crossed";
         showBanner("BANKED " + multText(mult), "good", 1.6);
       }
-      if (kind !== "splat") hideDeathCard();
+      if (!dead) hideDeathCard();
       const r = resolveRun;
       resolveRun = null;
       if (r) r(outcome);
     }
 
     function die(killerLane) {
+      deathKind = "splat";
       frog.state = "splat";
       frog.deadLane = killerLane;
       frog.squash = 1;
       shake = 0.45;
       sfx.squish();
       finish(0, "splat");
+    }
+
+    /* THE SWEEP: the frog stood on the verge or a median until the road's
+       clock ran out. No car touches it -- the road just takes the stake. This
+       is the rule that stops a patient player from waiting on a median for a
+       perfect alignment, so it is the machine's single most important timer. */
+    function swept() {
+      if (phase !== "run" || frog.state === "splat") return;
+      deathKind = "swept";
+      frog.state = "splat";
+      frog.deadLane = frog.lane;
+      frog.squash = 0;
+      shake = 0.3;
+      sfx.squish();
+      finish(0, "swept");
     }
 
     /* ---------- update ---------- */
@@ -531,6 +645,15 @@ export default {
         }
       } else if (frog.state === "rest") {
         frog.rest += dt;
+        // THE SWEEP CLOCK. On the verge and on every median the road shelters
+        // the frog for `restSecFor` seconds and then takes it -- and the stake
+        // with it. This is the rule that makes the run a timed crossing: raise
+        // it and a patient player can wait on a median until the whole road
+        // lines up, which is the farming loophole the ladder is fitted against.
+        if ((frog.lane === 0 || isSafeLane(frog.lane)) && sweepUsed() >= restSecFor(frog.lane)) {
+          swept();
+          return;
+        }
       }
 
       camY += (frog.y - camY) * Math.min(1, dt * 9);
@@ -1093,24 +1216,30 @@ export default {
       // here"); hopping = a countdown ring fed by whichever lane can still
       // hit the frog while it's over the paint.
       if (phase === "run" && frog.state === "rest") {
-        // standing on an island is untouchable, so the ring closes completely
-        const island = isSafeLane(frog.lane);
-        const pocket = !island && blockT > 0;
-        const t = pocket
-          ? blockT
-          : timeUntilHit(lanes[frog.lane], C.frogX, C.frogHalfW);
+        // On the grass the ring is the sweep clock closing in; on a live lane
+        // it is the pocket (a full ring) or the next car's countdown.
+        const grass = frog.lane === 0 || isSafeLane(frog.lane);
+        const pocket = !grass && blockT > 0;
         const selfCw = lanes[frog.lane] && lanes[frog.lane].cw;
-        const ref = pocket
-          ? Math.max(0.001, blockSecFor(Math.max(1, frog.lane)))
-          : Math.max(C.cwFloor, Number.isFinite(selfCw) ? selfCw : C.cwFloor);
-        const safe = island || pocket || frog.lane === 0;
-        const f = safe ? 1 : clamp(t / ref, 0, 1);
+        let t, ref;
+        if (grass) {
+          ref = Math.max(0.001, restSecFor(frog.lane));
+          t = Math.max(0, ref - sweepUsed());
+        } else if (pocket) {
+          ref = Math.max(0.001, blockSecFor(Math.max(1, frog.lane)));
+          t = blockT;
+        } else {
+          ref = Math.max(C.cwFloor, Number.isFinite(selfCw) ? selfCw : C.cwFloor);
+          t = timeUntilHit(lanes[frog.lane], C.frogX, C.frogHalfW);
+        }
+        const warn = grass ? (t < 0.6 ? 2 : t < 1.4 ? 1 : 0)
+          : pocket ? 0
+            : (t < 0.3 ? 2 : t < 0.6 ? 1 : 0);
+        const f = clamp(t / ref, 0, 1);
         ctx.save();
         ctx.lineWidth = Math.max(2.5, laneH * 0.07);
         ctx.lineCap = "round";
-        ctx.strokeStyle = safe
-          ? "rgba(93,243,180,.8)"
-          : t < 0.3 ? "rgba(255,74,60,.95)" : "rgba(255,193,78,.9)";
+        ctx.strokeStyle = warn === 2 ? "rgba(255,74,60,.95)" : warn === 1 ? "rgba(255,193,78,.9)" : "rgba(93,243,180,.8)";
         ctx.beginPath();
         ctx.arc(fx, groundY, laneH * 0.62, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f);
         ctx.stroke();
@@ -1373,9 +1502,9 @@ export default {
       );
 
       const visual = el("div", { class: "ic-visual" },
-        el("div", { class: "ic-hint", text: "PAYOUT LADDER \u2014 ONE RUNG PER ISLAND, +0.05\u2192+0.14 A LANE" }),
+        el("div", { class: "ic-hint", text: "PAYOUT LADDER \u2014 ONE RUNG PER ISLAND, \u00D7" + multFor(10).toFixed(2) + " \u2192 \u00D7" + multFor(C.summit).toFixed(2) }),
         el("div", { class: "ic-scroll", style: { width: "100%", display: "flex", justifyContent: "center" } }, ladder),
-        el("div", { class: "ic-hint", text: "BANK WHENEVER YOU LIKE \u2014 ANY LANE, ANY TIME" })
+        el("div", { class: "ic-hint", text: "BANK ONLY ON STANDING GRASS \u2014 THE VERGE AND THE TEN MEDIANS" })
       );
 
       const tiers = el("div", { class: "ic-tiers" },
@@ -1404,10 +1533,12 @@ export default {
       const kvRow = (k, v) => el("div", { class: "row" }, el("span", { text: k }), el("span", { class: "v", text: v }));
       const kv = el("div", { class: "ic-kv" },
         kvRow("Start on the verge", "\u00D7" + C.startMult.toFixed(2)),
-        kvRow("First block, per lane", "+" + perHopFor(1).toFixed(2)),
-        kvRow("Last block, per lane", "+" + perHopFor(C.summit).toFixed(2)),
+        kvRow("Island 10 \u2014 first rung", "\u00D7" + multFor(10).toFixed(2)),
+        kvRow("Island 20", "\u00D7" + multFor(20).toFixed(2)),
+        kvRow("Island 50", "\u00D7" + multFor(50).toFixed(2)),
+        kvRow("The summit", "\u00D7" + multFor(C.summit).toFixed(2)),
+        kvRow("Sweep clock (verge and medians)", restSecFor(0).toFixed(1) + "s"),
         kvRow("Lane 1 safe pocket", blockSecFor(1).toFixed(2) + "s"),
-        kvRow("Lane 50 safe pocket", blockSecFor(50).toFixed(2) + "s"),
         kvRow("Summit safe pocket", blockSecFor(C.summit).toFixed(2) + "s")
       );
 
@@ -1417,42 +1548,45 @@ export default {
           sec("How you play",
             ul([
               "You begin safe on the verge, exactly even at <b>\u00D7" + C.startMult.toFixed(2) + "</b> \u2014 banking there just returns your stake.",
-              "<b>CROSS</b> hops one lane out. Every lane crossed pays a little more than the last.",
-              "<b>BANK</b> takes the money and ends the run. It is always safe, and you can take it on any lane.",
+              "<b>CROSS</b> hops one lane out. Traffic is on screen the whole time \u2014 nothing is hidden behind a dice roll.",
+              "<b>BANK</b> takes the money and ends the run \u2014 but <b>only on standing grass</b>: the verge, or one of the ten medians. Anywhere else the only way out is forward.",
+              "The multiplier only moves when you reach an <b>island</b>: it is the island that is worth money, not the lane.",
             ])
           ),
           sec("The road",
             ul([
               "The road is <b>" + C.summit + " lanes</b>, in ten blocks of ten.",
-              "Every tenth lane \u2014 <b>10, 20, 30 \u2026 90</b> \u2014 is a <b>SAFE ISLAND</b>: grass, scenery, no traffic, and nothing can ever touch you there. Rest as long as you like.",
+              "Every tenth lane \u2014 <b>10, 20, 30 \u2026 90</b> \u2014 is a <b>SAFE ISLAND</b>: grass, scenery, no traffic, and nothing can touch you there.",
+              "<b>THE ROAD SWEEPS YOU.</b> The verge and every median only shelter you for <b>" + restSecFor(0).toFixed(1) + " seconds</b>. When the bar empties, the road takes the frog \u2014 and the stake \u2014 with no car involved. Standing still is never free.",
               "<b>Lane 100 is the SUMMIT</b>: cross into it and the run ends on its own for <b>\u00D7" + multFor(C.summit).toFixed(2) + "</b>.",
             ])
           ),
           sec("Escalation",
             ul([
-              "The nine lanes between islands are a <b>tier</b>, and each tier starts harder than the one before it ended \u2014 crossing an island is stepping up.",
+              "The nine lanes between islands are a <b>tier</b>: faster traffic, longer convoys and bigger vehicles than the block before. The clear windows ratchet down block by block, with a short breather as you step onto each median.",
+              "<b>THE ISLAND 10 WALL.</b> The step off the first median is the sharpest of the whole road: the guaranteed window drops from <b>" + TIERS[0].cw[1].toFixed(2) + "s to " + TIERS[1].cw[0].toFixed(2) + "s</b>, the convoys grow from " + TIERS[0].cars[0] + "-" + TIERS[0].cars[1] + " vehicles to " + TIERS[1].cars[0] + "-" + TIERS[1].cars[1] + ", and the traffic jumps most of a lane per second. It is the wall the machine is built around \u2014 and it is where the money starts.",
               "Traffic gets <b>faster</b> (" + TIERS[0].speed[0].toFixed(2) + "/s at the start, " + TIERS[9].speed[1].toFixed(2) + "/s on the final stretch), convoys get <b>longer and bigger</b> (big rigs in the last blocks), and the guaranteed clear window <b>shrinks</b> from " + TIERS[0].cw[0].toFixed(2) + "s to " + TIERS[9].cw[1].toFixed(2) + "s.",
-              "<b>THE INTERCHANGE</b> (lanes 71\u201379) is the chaos tier \u2014 neighbouring lanes run at wildly different speeds.",
               "From <b>NIGHT CROSSING</b> onward the road descends into darkness, then rain, then a storm: you cross the final tiers by headlight.",
             ])
           ),
           sec("Payout",
             ul([
-              "Each block widens the rungs by <b>+" + C.perHopStep.toFixed(2) + "</b>: <b>+" + perHopFor(1).toFixed(2) + "</b> a lane in the first block, <b>+" + perHopFor(C.summit).toFixed(2) + "</b> a lane in the last \u2014 a straight line inside a tier, steeper every tier.",
-              "<b>\u00D7" + multFor(10).toFixed(2) + "</b> at island 10, <b>\u00D7" + multFor(50).toFixed(2) + "</b> at 50, and <b>\u00D7" + multFor(C.summit).toFixed(2) + "</b> on the summit.",
+              "One rung per island: <b>\u00D7" + multFor(10).toFixed(2) + "</b> at island 10, <b>\u00D7" + multFor(20).toFixed(2) + "</b> at 20, <b>\u00D7" + multFor(30).toFixed(2) + "</b> at 30, <b>\u00D7" + multFor(40).toFixed(2) + "</b> at 40, <b>\u00D7" + multFor(50).toFixed(2) + "</b> at 50, then <b>\u00D7" + multFor(60).toFixed(2) + "</b>, <b>\u00D7" + multFor(70).toFixed(2) + "</b>, <b>\u00D7" + multFor(80).toFixed(2) + "</b>, <b>\u00D7" + multFor(90).toFixed(2) + "</b> and <b>\u00D7" + multFor(C.summit).toFixed(2) + "</b> on the summit.",
+              "The rungs are fitted to a hard ceiling: even a <b>perfect</b> player's best possible banking schedule returns at most <b>" + Math.round(C.rtp * 100) + "%</b>. There is no bank target, no waiting trick and no stopping rule that beats the house.",
             ])
           ),
           sec("Safe pockets",
             ul([
               "Land in a gap and the road <b>blocks that lane behind you</b> \u2014 traffic holds still for a moment.",
-              "That pocket is <b>" + blockSecFor(1).toFixed(2) + "s</b> on the first lane and only <b>" + blockSecFor(C.summit).toFixed(2) + "s</b> near the summit, so standing still never stays free.",
-              "Islands are exempt \u2014 the pocket there never lapses.",
-              "Nothing is decided by a dice roll: every car is on screen, and the column ahead is lit green/red by whether it is open long enough.",
+              "That pocket is <b>" + blockSecFor(1).toFixed(2) + "s</b> on the first lane and only <b>" + blockSecFor(C.summit).toFixed(2) + "s</b> near the summit \u2014 it shrinks with every lane and every island you cross, so standing still never stays free.",
+              "Medians are not pockets. They are the only place you can bank, and the sweep clock is running the whole time you are on one.",
+              "The column ahead is lit green/red by whether it is open long enough for a hop, so you can read the whole decision off the screen.",
             ])
           ),
           sec("Getting flattened",
             ul([
               "If a car reaches your column while you are hopping, the frog is flattened and the <b>whole stake is lost</b>.",
+              "Standing too long is the other way to lose: when the sweep clock empties, the road takes the stake just as dead.",
               "Banking is the only guaranteed exit \u2014 the deeper you go, the more you are risking.",
             ])
           )
@@ -1462,9 +1596,9 @@ export default {
       openInfo("Frogger Gamble \u2014 How to Win", el("div", { class: "ic" },
         top,
         sec("The ten tiers", tiers,
-          note("Islands are the rest stops: nothing reaches you, so they are the natural place to decide whether to push on or bank.")),
+          note("Each island is a rest stop <b>on a timer</b>: nothing reaches you there, but the sweep clock is running, and it is the only ground you can bank from.")),
         sec("Your payout", kv,
-          note("Your <b>banked multiplier</b> is paid on your stake \u2014 a \u00D710 bank on a $10 bet returns $100. The HUD keeps your best bank so far."))
+          note("Your <b>banked multiplier</b> is paid on your stake \u2014 a <b>\u00D7" + multFor(70).toFixed(0) + "</b> bank on a $10 bet returns <b>$" + (10 * multFor(70)).toFixed(0) + "</b>. The HUD keeps your best bank so far."))
       ));
     }
 

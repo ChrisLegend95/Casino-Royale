@@ -1,7 +1,7 @@
 import { el, clear, sleep, toast, confetti, randInt, fmt, mult as multTxt } from "../ui.js";
 import { stageShell, clamp } from "./common.js";
 import { infoBtn, openInfo, gridMap, legend, sec, ul, note, cap, payChips } from "./infocard.js";
-import { CONFIG, state } from "../state.js";
+import { state } from "../state.js";
 
 const ORDER = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26];
 const RED = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
@@ -24,29 +24,14 @@ const OUTSIDE = [
 ];
 
 function outsideByKey(k) { return OUTSIDE.find((b) => b.key === k); }
-function numSpot(n) { return { id: "n" + n, kind: "number", n, pay: 36 }; }
+const STRAIGHT_PAY = 36;
+function numSpot(n) { return { id: "n" + n, kind: "number", n, pay: STRAIGHT_PAY }; }
 function outSpot(o) { return { id: "o" + o.key, kind: "outside", key: o.key, pay: o.pay }; }
 function spotWins(s, n) {
   if (s.kind === "number") return s.n === n;
   const o = outsideByKey(s.key);
   return o ? o.test(n) : false;
 }
-/* split the total bet as evenly as possible across the picks; the first
-   `remainder` spots carry the extra dollar so the chips add up exactly */
-function allocate(total, k) {
-  const base = Math.floor(total / k);
-  const rem = total - base * k;
-  const out = [];
-  for (let i = 0; i < k; i++) out.push(base + (i < rem ? 1 : 0));
-  return out;
-}
-
-function rouletteLimit(level) {
-  const lv = Math.max(1, Math.floor(Number(level) || 1));
-  const v = CONFIG.rouletteMaxBetBase * Math.pow(lv, CONFIG.rouletteMaxBetExp);
-  return Math.max(10, Math.floor(v / 10) * 10);
-}
-
 /* the controller reads this to explain why SPIN is disabled */
 const pickState = { hint: "Pick at least one spot on the felt first." };
 
@@ -55,14 +40,16 @@ export default {
   name: "Roulette",
   icon: "\u{1F3A1}",
   action: "SPIN",
-  blurb: "European wheel \u2014 click as many spots as you like. Your bet is split across them ($1 each minimum), then the ball drops.",
+  blurb: "European wheel \u2014 click as many spots as you like. Every spot takes a chip of the same size, and the total can't pass the table limit.",
   payoutNote: () =>
-    'Click any number of spots: your bet is split across them, <span class="k">$1 minimum per spot</span>. ' +
+    'Click any number of spots \u2014 <span class="k">every spot takes a chip of your bet</span>, so the number on the felt is your bet \u00D7 the spots you picked, hard-capped by the table limit. ' +
     'Even-money spots pay <span class="k">2x</span>, dozens/columns <span class="k">3x</span>, a straight number <span class="k">36x</span>. ' +
-    "Base return 97.3%. Lucky Coin perks can nudge a losing ball onto one of your spots.",
+    "Base return 97.3%, the best of any wheel here. Lucky Coin perks give a small, capped chance of nudging a losing ball onto one of your spots.",
+  unitLabel: "spots",
   minBet: 1,
+  /* one pocket is the whole edge, so the best single spot (a straight) is the ceiling */
+  maxWinMult: STRAIGHT_PAY,
   get pickHint() { return pickState.hint; },
-  maxBet(level) { return rouletteLimit(level); },
 
   create(app) {
     const history = [];
@@ -119,7 +106,7 @@ export default {
 
     const root = stageShell(
       "Roulette",
-      "European wheel \u2014 one zero, 37 pockets. Click as many spots as you like; your bet splits across them.",
+      "European wheel \u2014 one zero, 37 pockets. Every spot you click takes a chip of the same size; the total can't pass the table limit.",
       { info: infoBtn(() => openInfoCard()) },
       el("div", { class: "roul-wrap" },
         wheelBox,
@@ -148,14 +135,22 @@ export default {
       if (spinning) return;
       if (picks.has(spot.id)) {
         picks.delete(spot.id);
-      } else {
-        const bet = Math.max(1, Math.floor(app.bet || 0));
-        if (picks.size >= bet) {
-          toast("Raise your bet to pick more spots \u2014 $1 minimum each.", "info", 2800);
-          return;
-        }
-        picks.set(spot.id, spot);
+        app.refreshBet();
+        return;
       }
+      /* every chip is the same size, so adding a spot adds one more full bet;
+         refuse the click rather than let the felt pass the table limit */
+      const bet = Math.max(1, Math.floor(app.bet || 0));
+      const total = bet * (picks.size + 1);
+      if (total > app.tableLimit()) {
+        toast("Table limit is " + fmt(app.tableLimit()) + " a spin \u2014 that chip would put " + fmt(total) + " on the felt.", "info", 3000);
+        return;
+      }
+      /* red and black are the two halves of the same spin \u2014 backing both only
+         donates a chip to the zero, so the second one clears the first */
+      if (spot.key === "red") picks.delete("oblack");
+      if (spot.key === "black") picks.delete("ored");
+      picks.set(spot.id, spot);
       app.refreshBet();
     }
     function lockFelt(on) {
@@ -175,21 +170,17 @@ export default {
       const list = [...picks.values()];
       const k = list.length;
       const bet = Math.max(0, Math.floor(app.bet || 0));
-      const chips = k ? allocate(bet, k) : [];
-      const chipById = new Map();
-      list.forEach((s, i) => chipById.set(s.id, chips[i]));
+      const total = bet * k;
 
       for (const { btn, chip, n } of numBtns) {
-        const id = "n" + n;
-        const on = picks.has(id);
+        const on = picks.has("n" + n);
         btn.classList.toggle("on", on);
-        chip.textContent = on ? fmt(chipById.get(id)) : "";
+        chip.textContent = on ? fmt(bet) : "";
       }
       for (const { btn, chip, key } of outBtns) {
-        const id = "o" + key;
-        const on = picks.has(id);
+        const on = picks.has("o" + key);
         btn.classList.toggle("on", on);
-        chip.textContent = on ? fmt(chipById.get(id)) : "";
+        chip.textContent = on ? fmt(bet) : "";
       }
 
       covered = new Set(list.filter((s) => s.kind === "number").map((s) => s.n));
@@ -199,19 +190,18 @@ export default {
       clear(summaryEl);
       if (!k) {
         summaryEl.appendChild(el("span", { class: "rs-warn", text: "Pick one or more spots to build your bet." }));
-        pickState.hint = "Pick at least one spot on the felt first.";
       } else {
-        summaryEl.appendChild(el("span", {}, el("b", { text: String(k) }), " spot" + (k === 1 ? "" : "s") + " \u00B7 total " + fmt(bet)));
-        if (bet >= k) {
-          const lo = Math.floor(bet / k), hi = Math.ceil(bet / k);
-          summaryEl.appendChild(el("span", { class: "rs-ok", text: " \u00B7 " + (lo === hi ? fmt(lo) : fmt(lo) + "\u2013" + fmt(hi)) + " on each" }));
-          pickState.hint = "Pick at least one spot on the felt first.";
-        } else {
-          summaryEl.appendChild(el("span", { class: "rs-warn", text: " \u00B7 bet at least " + fmt(k) + " ($1 per spot)" }));
-          pickState.hint = "Bet at least " + fmt(k) + " \u2014 one dollar per spot.";
-        }
+        summaryEl.appendChild(el("span", {},
+          el("b", { text: String(k) }), " spot" + (k === 1 ? "" : "s"),
+          " \u00B7 ", el("b", { text: fmt(bet) }), " a chip"));
+        const limit = app.tableLimit();
+        summaryEl.appendChild(el("span", {
+          class: total > limit ? "rs-warn" : "rs-ok",
+          text: " \u00B7 " + fmt(total) + (total > limit ? " breaks the " + fmt(limit) + " table limit" : " on the felt"),
+        }));
       }
-      detailEl.textContent = "Table limit " + fmt(rouletteLimit(state.level)) + " per spin \u00B7 level " + state.level;
+      pickState.hint = "Pick at least one spot on the felt first.";
+      detailEl.textContent = "Table limit " + fmt(app.tableLimit()) + " per spin \u00B7 level " + state.level;
     }
 
     /* ---------- wheel ---------- */
@@ -388,11 +378,10 @@ export default {
 
       let n;
       if (app.cheat) {
-        /* reward rig: drop the ball onto the highest-paying spot the player
-           backed (share of the stake x its odds), then a number it covers */
-        const chips = allocate(stake, k);
+        /* reward rig: every chip is the same size, so drop the ball onto the
+           best-paying spot the player backed, then a number it covers */
         let bi = 0;
-        for (let i = 1; i < k; i++) if (chips[i] * list[i].pay > chips[bi] * list[bi].pay) bi = i;
+        for (let i = 1; i < k; i++) if (list[i].pay > list[bi].pay) bi = i;
         const spot = list[bi];
         if (spot.kind === "number") {
           n = spot.n;
@@ -404,7 +393,14 @@ export default {
       } else {
         n = ORDER[randInt(0, 36)];
         if (!list.some((s) => spotWins(s, n))) {
-          const chance = clamp(luck * 0.9, 0, 0.42);
+          /* The luck nudge. The chance scales DOWN with the best price on the felt
+             (chance = luck * k / bestPay), so the return it adds stays a flat
+             sliver whether you backed a colour or a single number -- without that
+             division a straight-up bet would convert ~97% of its losses into a
+             36x win and the wheel would print money. See the balance book in
+             main.pjs. */
+          const bestPay = Math.max.apply(null, list.map((s) => s.pay));
+          const chance = clamp(luck * 0.05 / Math.max(2, bestPay), 0, 0.5);
           if (chance > 0 && Math.random() < chance) {
             const cover = numbersCovered();
             if (cover.length) n = cover[randInt(0, cover.length - 1)];
@@ -439,11 +435,12 @@ export default {
       hub.classList.add("pop");
       flashWin(col);
 
-      const chips = allocate(stake, k);
+      /* every chip is the same stake, so the round is worth stake x k and each
+         winning spot pays its own odds on its own chip */
       let ret = 0;
       const wonSpots = [];
-      list.forEach((s, i) => { if (spotWins(s, n)) { ret += chips[i] * s.pay; wonSpots.push(s); } });
-      const mult = ret / stake;
+      for (const s of list) if (spotWins(s, n)) { ret += stake * s.pay; wonSpots.push(s); }
+      const mult = ret / (stake * k);
 
       for (const { btn, n: num } of numBtns) btn.classList.toggle("won", wonSpots.some((s) => s.kind === "number" && s.n === num));
       for (const { btn, key } of outBtns) btn.classList.toggle("won", wonSpots.some((s) => s.kind === "outside" && s.key === key));
@@ -561,9 +558,10 @@ export default {
         el("div", { class: "ic-col" },
           sec("How the felt works",
             ul([
-              "Click <b>any number of spots</b> \u2014 straight numbers and outside bets. Your stake is split across them as evenly as possible.",
-              "Each spot needs at least <b>$1</b>, so you can never pick more spots than your bet.",
-              "When the ball drops, every spot that covers it pays its own odds on <b>its own share</b>; losing shares are simply gone.",
+              "Click <b>any number of spots</b> \u2014 straight numbers and outside bets. Every spot takes a chip of <b>your bet</b>, so the chips are always the same size.",
+              "The total on the felt is your bet \u00D7 the spots you picked, and it can never pass the <b>table limit</b> \u2014 the last spot that would break it is simply refused.",
+              "When the ball drops, every spot that covers it pays its own odds on its own chip; losing chips are gone.",
+              "You can't back <b>red and black at once</b> \u2014 picking one clears the other.",
             ])
           ),
           sec("What each spot pays",
@@ -581,8 +579,9 @@ export default {
           ),
           sec("Lucky Coin perks",
             ul([
-              "If the ball would land outside all your spots, perks give it a chance to land on a <b>covered</b> number instead.",
+              "If the ball would land outside all your spots, perks give it a small chance to land on a <b>covered</b> number instead.",
               "It can only rescue a losing ball \u2014 it never nudges a winning number off your felt.",
+              "The chance is scaled to the price of your bet, so it adds the same sliver of return whether you backed a colour or a single number \u2014 the wheel stays under 100% either way.",
             ])
           )
         )
@@ -597,7 +596,7 @@ export default {
       openInfo("Roulette \u2014 How to Win", el("div", { class: "ic" },
         top,
         sec("Pays per $1 on a spot", pay,
-          note("Every spot you back gets its own dollar and its own payout \u2014 you can't lose more than the share on a losing spot. Table limit <b>" + fmt(rouletteLimit(state.level)) + "</b> per spin."))
+          note("Every spot you back gets the same chip and pays its own odds on it \u2014 a losing chip is the only thing you lose. Table limit <b>" + fmt(app.tableLimit()) + "</b> per spin."))
       ));
     }
 
@@ -605,7 +604,17 @@ export default {
     return {
       root, play, destroy,
       actionLabel: "SPIN",
-      canPlay: () => (spinning ? false : state.idle.on ? true : picks.size > 0 && Math.floor(app.bet || 0) >= picks.size),
+      /* one "unit" is one chip, so the controller stakes bet x spots and caps
+         the bet at tableLimit / spots -- the felt can never pass the limit.
+         Idle always plays a single colour chip, so it is always one unit. */
+      getBetUnits: () => (state.idle.on ? 1 : Math.max(1, picks.size)),
+      unitLabel: "spots",
+      canPlay: () => {
+        if (spinning) return false;
+        if (state.idle.on) return true;
+        if (picks.size < 1) return false;
+        return Math.floor(app.bet || 0) * picks.size <= app.tableLimit();
+      },
       onBetChange: () => paint(),
     };
   },

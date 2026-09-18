@@ -56,7 +56,8 @@ export default {
   payoutNote: () =>
     'Cash out before the crash and you get <b>bet \u00D7 multiplier</b>. Base return <span class="k">97%</span>. ' +
     "The rocket eases off the pad and accelerates \u2014 the longer it flies the faster the multiplier compounds. " +
-    "Flip <b>AUTO</b> on to bank at a target hands-free, or leave it off and hit <b>CASH OUT</b> yourself. Bank and the rocket still flies on \u2014 it re-rolls its own death, uncapped, so you watch where it <i>would</i> have blown. Lucky Coin perks push the rocket higher.",
+    "Flip <b>AUTO</b> on to bank at a target hands-free, or leave it off and hit <b>CASH OUT</b> yourself. Bank and the rocket still flies on \u2014 it re-rolls its own death, so you watch where it <i>would</i> have blown. " +
+    "The house pays a maximum of <b>" + CONFIG.maxWinMult + "\u00D7</b> your bet on a round, so targets above that are pointless. Lucky Coin perks nudge the rocket a little higher.",
   minBet: 1,
   canIdle: false,
 
@@ -66,7 +67,7 @@ export default {
     const box = el("div", { class: "crash-box" }, canvas, multEl);
     const historyEl = el("div", { class: "crash-history" }, el("span", { class: "panel-head", text: "HISTORY" }));
 
-    const targetInput = el("input", { type: "number", min: "1.01", step: "0.01", value: "2.00" });
+    const targetInput = el("input", { type: "number", min: "1.01", step: "0.01", value: "2.00", max: String(app.houseMaxMult()) });
     const autoBtn = el("button", { class: "autotoggle on", type: "button", text: "AUTO: ON", onclick: () => setAuto(!autoCash) });
     const cashBtn = el("button", { class: "cashbtn", type: "button", text: "CASH OUT", disabled: true, onclick: () => cashOut() });
     const msgEl = el("div", { class: "bj-msg", text: "Set your target, then LAUNCH." });
@@ -321,7 +322,7 @@ export default {
       let p = (1 - EDGE) / Math.max(1e-6, 1 - u);
       p = Math.floor(p * 100) / 100;
       let cp = Math.max(1, p);
-      cp *= 1 + luck * 0.25;
+      cp *= 1 + luck * 0.06;
       return Math.max(1, Math.floor(cp * 100) / 100);
     }
 
@@ -333,7 +334,7 @@ export default {
     function ghostFrom(m, luck) {
       const u = Math.random();
       let g = m / Math.max(1e-9, 1 - u);
-      g *= 1 + luck * 0.25;
+      g *= 1 + luck * 0.06;
       g = Math.floor(g * 100) / 100;
       return Math.max(m + 0.01, g);
     }
@@ -428,7 +429,8 @@ export default {
 
     function target() {
       const v = Number(targetInput.value);
-      return Number.isFinite(v) && v >= 1.01 ? v : 2;
+      const hi = Math.max(1.01, app.houseMaxMult());
+      return Number.isFinite(v) && v >= 1.01 ? Math.min(hi, v) : 2;
     }
 
     function setAuto(on) {
@@ -601,8 +603,9 @@ export default {
           ),
           sec("Lucky Coin perks",
             ul([
-              "Each stack lifts the drawn crash point by <b>+25%</b> of itself, so the rocket runs a little further.",
+              "Each stack lifts the drawn crash point by a small percentage of itself, so the rocket runs a little further.",
               "Your cash-out multiplier is unchanged \u2014 the extra height is pure edge.",
+              "It is deliberately gentle and capped: the 97% return stays under 100% at the highest luck a player can reach.",
             ])
           )
         )
@@ -610,7 +613,7 @@ export default {
 
       openInfo("Rocket Crash \u2014 How to Win", el("div", { class: "ic" },
         top,
-        sec("Reach odds", note("Reach odds are <b>0.97 / m</b> for any target <span style='white-space:nowrap'><b>m</b></span> \u2014 set a modest target to win often, or a tall one to win big."))
+        sec("Reach odds", note("Reach odds are <b>0.97 / m</b> for any target <span style='white-space:nowrap'><b>m</b></span> \u2014 set a modest target to win often, or a tall one to win big. The house pays at most <b>" + CONFIG.maxWinMult + "\u00D7</b> your bet on one round, so a target above that returns no more than the cap."))
       ));
     }
 

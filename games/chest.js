@@ -1,5 +1,5 @@
 import { el, clear, sleep, toast } from "../ui.js";
-import { stageShell } from "./common.js";
+import { stageShell, round2 } from "./common.js";
 import { infoBtn, openInfo, gridMap, legend, sec, ul, note, cap, payChips } from "./infocard.js";
 import { CONFIG } from "../state.js";
 
@@ -12,11 +12,12 @@ import { CONFIG } from "../state.js";
    what is reshuffled every round.
 
    The star's second pick is worth, on average, exactly what a
-   random chest is worth, so the whole table still returns 200%
-   of your bet:
-       non-star chests: 10 + 3 + 2 + 1 (+ 4 x 0) = 16 over 8
-       star chest     : re-pick  ->  16 / 8 = 2
-       (16 + 2) / 9 = 2.00
+   random chest is worth, so the whole table returns the sum of the
+   four prizes divided by eight:
+       non-star chests: 4 + 2 + 1 + 0.5 (+ 4 x 0) = 7.5 over 8
+       star chest     : re-pick  ->  7.5 / 8 = 0.9375
+   = 93.75% of your bet, a real house edge. The four prizes MUST
+   sum to less than 8 or the machine prints money.
    ========================================================= */
 
 const COUNT = 9;
@@ -42,12 +43,14 @@ export default {
   action: "OPEN A CHEST",
   blurb: "Nine chests: four pay, four are traps, and one Lucky Star gives you a second pick.",
   minBet: 1,
+  /* one pick, one prize -- the top chest is the ceiling */
+  maxWinMult: Math.max(CONFIG.chestHigh, CONFIG.chestGem, CONFIG.chestMid, CONFIG.chestLow),
   payoutNote: () =>
     "Nine chests: <b>four of them pay</b>, four are traps, and one is a " +
     "<b>\u2B50 Lucky Star</b> that hands you a free second pick. The paying chests hold " +
     "<b>\u00D7" + CONFIG.chestHigh + "</b>, <b>\u00D7" + CONFIG.chestGem + "</b>, <b>\u00D7" + CONFIG.chestMid +
     "</b> and <b>\u00D7" + CONFIG.chestLow + "</b> on your bet, hidden in random chests each play. " +
-    "Expected return is <b>200%</b> of your bet, so this one is squarely on the house's bad side.",
+    "Expected return is <b>" + ((CONFIG.chestHigh + CONFIG.chestGem + CONFIG.chestMid + CONFIG.chestLow) / 8 * 100) + "%</b> of your bet \u2014 a real house edge, like every other table.",
 
   create(app) {
     let slots = new Array(COUNT).fill(0);
@@ -263,6 +266,7 @@ export default {
 
     function openInfoCard() {
       const map = gridMap(3, 3, { cell: 46, gap: 8 });
+      const prizeSum = CONFIG.chestHigh + CONFIG.chestGem + CONFIG.chestMid + CONFIG.chestLow;
       const TIERS = [
         { r: 0, c: 0, g: TIER_ICON[0], m: CONFIG.chestHigh },
         { r: 0, c: 2, g: TIER_ICON[1], m: CONFIG.chestGem },
@@ -320,9 +324,9 @@ export default {
           ),
           sec("Expected return",
             ul([
-              "One of each of the four prizes is always out there: " + CONFIG.chestHigh + " + " + CONFIG.chestGem + " + " + CONFIG.chestMid + " + " + CONFIG.chestLow + " = <b>16</b> over eight non-star chests.",
-              "The star's re-pick adds another <b>16 / 8 = 2</b>, so the whole table returns <b>(16 + 2) / 9 = 200%</b>.",
-              "This is the one machine where the odds are firmly on your side.",
+              "One of each of the four prizes is always out there: " + prizeSum + " over eight non-star chests, so the average chest is worth <b>" + round2(prizeSum / 8) + "</b> on your bet.",
+              "The star's re-pick is worth that same average, which makes the whole table return <b>" + round2((prizeSum / 8) * 100) + "%</b> of your bet.",
+              "The prizes are tuned so the four of them sum to less than eight \u2014 that is where the house edge lives.",
             ])
           )
         )

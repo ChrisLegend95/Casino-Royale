@@ -7,6 +7,8 @@ const COLORS = ["#ef4d5a", "#4d9fff", "#f2c14e", "#37d67a", "#a06bff", "#ff8f3f"
 const FALLBACK_NAMES = ["Thunderbolt", "Midnight", "Lucky Star", "Iron Hoof", "Velvet", "Dust Devil"];
 const LANE_H = 38;
 const N = 6;
+/* the payout curve's clamp -- see openInfoCard and the picks list */
+const MAX_PAY = 60;
 
 function pickNames() {
   const out = [];
@@ -32,6 +34,8 @@ export default {
     'Odds are posted before the race \u2014 longshots pay big. Base return <span class="k">92%</span>. ' +
     "Lucky Coin perks make your pick run faster than its odds suggest.",
   minBet: 1,
+  /* the payout curve is clamped at MAX_PAY, so a longshot is the ceiling */
+  maxWinMult: MAX_PAY,
 
   create(app) {
     const names = pickNames();
@@ -73,7 +77,7 @@ export default {
       for (let i = 0; i < N; i++) ratings.push(0.55 + Math.random() * 0.95);
       const sum = ratings.reduce((a, b) => a + b, 0);
       const p = ratings.map((r) => r / sum);
-      const payouts = p.map((pi) => clamp(0.92 / pi, 1.05, 60));
+      const payouts = p.map((pi) => clamp(0.92 / pi, 1.05, MAX_PAY));
       race = { ratings, p, payouts };
       renderPicks();
     }
@@ -249,7 +253,7 @@ export default {
 
       // luck boost: your runner's rating improves (odds were already posted)
       const ratings = race.ratings.slice();
-      ratings[selected] *= 1 + luck * 0.55;
+      ratings[selected] *= 1 + luck * 0.10;
       const sum = ratings.reduce((a, b) => a + b, 0);
       const p = ratings.map((r) => r / sum);
 
@@ -325,7 +329,7 @@ export default {
       }
     }, 320);
     function openInfoCard() {
-      const pay = (p) => clamp(0.92 / p, 1.05, 60);
+      const pay = (p) => clamp(0.92 / p, 1.05, MAX_PAY);
       const W = 340, H = 178, L = 44, R = 16, T = 16, B = 30;
       const PMAX = 0.6, YMAX = 20;
       const px = (p) => L + (Math.min(p, PMAX) / PMAX) * (W - L - R);

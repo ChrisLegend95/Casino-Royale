@@ -6,27 +6,30 @@ import { sfx, preloadSpin } from "../audio.js";
 
 /* =========================================================
    Russian Roulette -- a ten-rung ladder, a six-chamber drum,
-   and one live round waiting for you to get greedy.
+   and two live rounds waiting for you on the very first spin.
 
    Six chambers, one buy-in at x1.00. Every shot is a FRESH load
    and a FRESH whirl: nothing carries over and the drum has no
    memory of you. rrLadder (main.pjs) is the whole game -- one row
    per round, giving the bank a blank climbs to and the live rounds
    the next load carries. With the shipped rows the opening round
-   is x1.10 on one live round and the tenth is x15.00 on five of
-   the six chambers, so the ladder gets richer and deadlier at the
-   same time.
+   is x1.35 on TWO live rounds -- a third of the drum -- and the
+   tenth is x20.00 on five of the six chambers, so the ladder gets
+   richer and deadlier at the same time.
 
    SPIN       The drum whirls, the hammer falls. A blank climbs the
               bank to the next rung and moves the round counter on;
               the live round ends the run and the bank is gone.
 
-   CASH OUT   Any time, at whatever the bank is standing at. The
-              bank is never paid until you ask for it, and the number
-              on the HUD is exactly what you keep -- rrRake is a cage
-              cut and ships at 0. Surviving the top rung takes SPIN
-              away entirely: there is nothing left to climb for, so
-              the run has to be banked.
+   CASH OUT   Once the first blank is behind you, at whatever the
+              bank is standing at. The bank is never paid until you
+              ask for it, and the number on the HUD is exactly what
+              you keep -- rrRake is a cage cut and ships at 0.
+              (Cashing out before the first shot would be a
+              risk-free round, so the button is locked until then.)
+              Surviving the top rung takes SPIN away entirely: there
+              is nothing left to climb for, so the run has to be
+              banked.
 
    The round being played is shown (the HUD's Round cell, and the
    message after each blank names the next load), but the drum
@@ -35,9 +38,11 @@ import { sfx, preloadSpin } from "../audio.js";
 
    The ladder is NOT fair at any rung. Surviving to round n and
    cashing there returns (the chained survival odds) x (that rung's
-   multiplier): 0.917 for round 1, then 0.833, 0.793, 0.579 ... down
-   to 0.036 at the top. The whole game is the nerve to walk away,
-   and the maths is on the side of whoever does.
+   multiplier): 0.900 for round 1, then 0.667, 0.533, 0.370 ... down
+   to 0.0023 at the top -- monotone, so the best play is one spin
+   and a walk, and every extra spin is the losing side. The whole
+   game is the nerve to walk away, and the maths is on the side of
+   whoever does.
    ========================================================= */
 
 const CH = clamp(Math.round(CONFIG.rrChambers) || 6, 4, 8);
@@ -47,8 +52,8 @@ const RAKE = clamp(CONFIG.rrRake, 0, 0.5);
    broken or absent pjs table still leaves a playable machine (the rrLadder block in
    main.pjs explains the rows and prints the returns they imply). */
 const DEFAULT_LADDER = [
-  [1.10, 1], [1.20, 1], [1.37, 1], [1.50, 2], [2.00, 2],
-  [2.75, 2], [3.50, 3], [5.00, 3], [7.50, 4], [15.00, 5],
+  [1.35, 2], [1.50, 2], [1.80, 2], [2.50, 3], [3.50, 3],
+  [5.00, 3], [7.50, 4], [10.00, 4], [14.00, 5], [20.00, 5],
 ];
 
 /* Normalise whatever came out of main.pjs into ascending {mult, live} rungs: rows
@@ -219,8 +224,10 @@ export default {
   action: "LOAD THE CYLINDER",
   canIdle: false,
   minBet: 1,
+  /* the top rung of the ladder is the most a buy-in can be cashed for */
+  maxWinMult: TOP_MULT,
   blurb: "Six chambers and a ten-rung ladder you buy into once: a blank climbs the bank up the ladder, the live round ends the run and takes it. It opens at ×" +
-    LADDER[0].mult.toFixed(2) + " on " + LADDER[0].live + " live round and the top rung is ×" + TOP_MULT.toFixed(2) +
+    LADDER[0].mult.toFixed(2) + " on " + LADDER[0].live + " live rounds and the top rung is ×" + TOP_MULT.toFixed(2) +
     " on " + TOP_LIVE + " of the " + CH + " chambers — a single empty one. Cash out any time, and the number the bank shows is exactly what you keep.",
   payoutNote: () =>
     "One buy-in at ×1.00, one bank, and a drum re-loaded and spun fresh before every shot. Each round is one rung of a <b>" + RUNGS +
@@ -437,12 +444,17 @@ export default {
       bigMult.textContent = "\u00D7" + bank.toFixed(2);
       bigMult.classList.toggle("hot", bank >= HOT_MULT);
       spinBtn.disabled = !ready || top;
-      cashBtn.disabled = !(ready && bank > 0);
+      /* CASH OUT is locked until the first blank is behind you: buying in and
+         banking x1.00 would be a risk-free round (and a free-XP loop). One live
+         round has to be survived before there is anything to take home. */
+      const locked = blanks < 1;
+      cashBtn.disabled = !(ready && bank > 0 && !locked);
       spinSub.textContent = spinning ? "the drum is turning…"
         : ready && top ? "top of the ladder \u2014 cash it"
           : ready ? "round " + round + " of " + RUNGS + " \u00B7 " + rungFor(blanks).live + " live"
             : over && bank > 0 ? "run banked" : "the drum is loaded";
-      cashSub.textContent = ready ? "keep " + fmt(stake * net)
+      cashSub.textContent = ready
+        ? (locked ? "spin the first round" : "keep " + fmt(stake * net))
         : over && bank > 0 ? "banked " + fmt(stake * net) : "nothing to bank";
       svg.classList.toggle("ready", ready);
       svg.classList.toggle("spinning", spinning);
@@ -574,6 +586,7 @@ export default {
     }
 
     function act(what) {
+      if (what === "cash" && blanks < 1) return;   // nothing to cash before a shot
       if (!actionResolve) {
         if (phase === "ready") queued = what;
         return;

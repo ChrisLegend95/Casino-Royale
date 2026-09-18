@@ -43,7 +43,7 @@ export default {
     "Land <b>3, 4 or 5</b> matching symbols from the left edge of any of your paylines. " +
     "\u{1F0CF} is <b>wild</b>, and pays on its own line too. " +
     "\u{1F4A0} pays <b>\u00D7 total bet</b> anywhere, and <b>3 or more</b> launch up to <b>20 free spins</b>. " +
-    "All pays above are <b>per line bet</b>.",
+    "All pays above are <b>per line bet</b>. Base return <b>~93%</b>; the biggest line pays <b>1000\u00D7</b>.",
   minBet: 1,
 
   create(app) {

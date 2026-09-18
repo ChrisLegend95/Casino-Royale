@@ -25,8 +25,8 @@ function pairLabel(s) {
 function weightsFor(luck) {
   return SYMBOLS.map((s) => {
     let m = 1;
-    if (s.tier === 1) m = 1 + luck * 1.3;
-    if (s.tier === 2) m = 1 + luck * 2.6;
+    if (s.tier === 1) m = 1 + luck * 0.2;
+    if (s.tier === 2) m = 1 + luck * 0.4;
     return s.w * m;
   });
 }
@@ -57,8 +57,10 @@ export default {
   payoutNote: () =>
     'Match <b>3 symbols</b> for a big payout, a <b>pair</b> of \u{1F514}/\u{1F48E}/7\uFE0F\u20E3/\u2B50, ' +
     'or \u{1F352}\u{1F352} on the <b>first two reels</b> \u2014 that one returns your credit (<b>1x</b>). ' +
-    'Top prize: three \u2B50 = <span class="k">200x</span>. Lucky Coin perks load the reels.',
+    'Top prize: three \u2B50 = <span class="k">200x</span>. Base return <b>95.7%</b>; Lucky Coin perks load the reels a little.',
   minBet: 1,
+  /* the best triple on the paytable */
+  maxWinMult: Math.max(...SYMBOLS.map((s) => s.three)),
 
   create(app) {
     const root = stageShell(
@@ -379,8 +381,8 @@ export default {
           ),
           sec("Lucky Coin perks",
             ul([
-              "Each Lucky Coin stack raises the odds of the premium symbols on every reel.",
-              "That shifts the machine warmer \u2014 the paytable itself never changes.",
+              "Each Lucky Coin stack nudges the odds of the premium symbols up on every reel \u2014 a small, capped tilt, not a different machine.",
+              "The paytable never changes, and the return stays under <b>100%</b> at every luck level.",
             ])
           )
         )
@@ -392,7 +394,7 @@ export default {
 
       openInfo("Lucky Sevens \u2014 Pay Table", el("div", { class: "ic" },
         top,
-        sec("Pays per credit", pay, note("Three of a kind is paid per credit staked. A pair pays for the four premium symbols, and \u{1F352}\u{1F352} pays 1\u00D7 on the first two reels only \u2014 the last two pay nothing."))
+        sec("Pays per credit", pay, note("Three of a kind is paid per credit staked. A pair pays for the four premium symbols, and \u{1F352}\u{1F352} pays 1\u00D7 on the first two reels only \u2014 the last two pay nothing. <b>Base return is 95.7%</b> \u2014 the house keeps 4.3 cents on the dollar."))
       ));
     }
 

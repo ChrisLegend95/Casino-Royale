@@ -23,27 +23,37 @@ import { sfx } from "../audio.js";
      SEQUENCE  The same pattern, one colour longer each pass.
                The order you already learned stays put, so all
                you carry is the new colour on the end. Gentler
-               ladder: x1.26 on level 1, widening to x1.52 by
-               level 27.
+               bank: the same rung pays less than RANDOM's.
 
      RANDOM    The whole pattern is re-rolled at the new length
-               every pass — nothing carries over, it's a fresh
-               read each time. Steeper ladder (x1.33 climbing to
-               x1.59) and it opens at FIVE colours, not three: a
-               fresh read of three colours is no test at all.
+               every pass -- nothing carries over, it is a fresh
+               read each time -- so it is worth more a colour,
+               and it opens at FIVE colours, not three: a fresh
+               read of three colours is no test at all.
 
-   The ladder is 27 LEVELS of difficulty, each level one colour
-   longer than the last: 3..29 colours in SEQUENCE and 5..31 in
-   RANDOM. The step is not constant — level p pays the mode's
-   base step plus memStepGrow for every level already climbed —
-   so the bank accelerates rather than growing geometrically at a
-   fixed rate. The safe threshold to push on is when your chance
-   of clearing the next sequence beats 1 / that level's step:
-   about 79% on level 1 falling to 66% by level 27 in SEQUENCE
-   (75% -> 63% in RANDOM). Clear the last level and the run
-   cashes out by itself on the summit payout (x6965 SEQUENCE /
-   x26351 RANDOM by default), which is what keeps a perfect
-   memoriser from bleeding the machine forever.
+   The ladder is 19 LEVELS of difficulty, each level one colour
+   longer than the last: 3..21 colours in SEQUENCE and 5..23 in
+   RANDOM. A rung is FITTED, never compounded: it pays
+   memLadderRtp divided by the chance the reference player has
+   of clearing that many colours, so that player's return is flat
+   at memLadderRtp and the ladder holds no free money at all.
+   The reference curve is perfect to memSkillKnee colours and
+   then memSkillDecay per extra colour (memSkillDecayRand in
+   RANDOM), which is why the first memSkillKnee colours pay
+   exactly x1.00 -- clear them, bank, and you have won nothing
+   but lost nothing. (The old ladder paid x1.26 for a
+   THREE-colour pattern and compounded to x295 at the summit, so
+   a player could bank the trivial first pass forever, or take a
+   fortune off a single good run.)
+
+   The top of the ladder is therefore also the machine's ceiling,
+   with memLadderCap / memLadderCapRand as hard guards just above
+   the summit, and the machine carries a TABLE MAXIMUM of its own
+   -- memTableBase x (level + 1), capped at memTableMax -- instead
+   of the house level limit, because a skill table is the one
+   place where a good player would otherwise be able to stake a
+   fortune against a ladder he cannot lose. Those two numbers
+   together cap what a single run can possibly win.
 
    Flash and gap timings start at memFlashMs/memGapMs and
    shrink by memFlashDecay/memGapDecay for EVERY extra colour,
@@ -66,9 +76,9 @@ const N = PADS.length;
 /* Opening length per mode: SEQUENCE opens at memStartLen, RANDOM at
    memRandStartLen (a fresh read of only three colours is no test at all). Resolved
    here, once, so the payout note, the info card and the engine cannot disagree.
-   `levels` is how many difficulty levels the ladder runs (27 by default), and each
+   `levels` is how many difficulty levels the ladder runs (19 by default), and each
    level is one colour longer than the last, so a mode's last level is
-   `start + levels - 1` colours: 3..29 in SEQUENCE, 5..31 in RANDOM. `speedCap`
+   `start + levels - 1` colours: 3..21 in SEQUENCE, 5..23 in RANDOM. `speedCap`
    (memMaxLen) is where the flash/gap ramp freezes -- past that many colours a
    pattern still gets longer, it just cannot flash any faster. */
 const seqStart = clamp(Math.round(CONFIG.memStartLen) || 3, 2, 6);
@@ -84,6 +94,36 @@ const GAP_DEG = 3.2;
 let gradSeq = 0;
 
 const round2 = (n) => Math.round(n * 100) / 100;
+
+/* The ladder is FITTED rather than compounded. A rung pays memLadderRtp divided by the
+   chance the reference player has of clearing that many colours, so that player's
+   return is FLAT at memLadderRtp -- every rung is a fair bet for exactly them, and only
+   their read on their own memory decides. The reference curve is: perfect to
+   memSkillKnee colours, then memSkillDecay per extra colour (memSkillDecayRand in
+   RANDOM, which is a harder read). So the first memSkillKnee colours pay exactly
+   x1.00 -- a bank, not a win.
+
+   That knee is the whole point. The old ladder paid a fixed x1.26 for a THREE-colour
+   pattern, so a player could clear the trivial first pass, bank it, and compound +26%
+   a round forever without ever taking a real risk; the ladder also compounded to x295
+   at the summit, which meant a good memoriser banked a fortune in a handful of rounds.
+   A fitted ladder cannot do either: the easy rungs pay nothing, and the top is bounded
+   by the reference player's own odds instead of by a growth rate.
+
+   It lives at module scope rather than inside create() because the payout note, the
+   info card and the running HUD all print it, and they must not be able to disagree. */
+const knee = clamp(Math.round(CONFIG.memSkillKnee), 0, 60);
+const ladderRtp = clamp(CONFIG.memLadderRtp, 0.05, 1.2);
+const decayFor = (m) => clamp(m === "rand" ? CONFIG.memSkillDecayRand : CONFIG.memSkillDecay, 0.3, 0.999);
+const capFor = (m) => Math.max(1, m === "rand" ? CONFIG.memLadderCapRand : CONFIG.memLadderCap);
+const multAt = (m, p) => {
+  const n = startFor(m) + clamp(Math.round(p), 0, levels) - 1;
+  const extra = Math.max(0, n - knee);
+  return round2(clamp(ladderRtp / Math.pow(decayFor(m), extra), 1, capFor(m)));
+};
+const summitSeq = multAt("seq", levels);
+const summitRand = multAt("rand", levels);
+const machineMax = Math.max(summitSeq, summitRand);
 
 function pt(r, deg) {
   const a = (deg * Math.PI) / 180;
@@ -154,42 +194,34 @@ export default {
   action: "START RECALL",
   canIdle: false,
   minBet: 1,
+  /* The machine's own table maximum, which overrides the house level limit (see the
+     maxBet() hook in main.js). A memory game is the one table where being good is
+     worth money, so it is the one table that needs a lid on the stake: without it a
+     perfect reader could stake the whole bankroll against a ladder he cannot lose. */
+  maxBet: (level) => Math.min(CONFIG.memTableMax, CONFIG.memTableBase * (1 + Math.max(1, level))),
+  /* no run can pay more than the caps allow, so advertise that rather than maxWinMult */
+  maxWinMult: Math.max(capFor("seq"), capFor("rand")),
   blurb: "Four neon pads, one ever-growing pattern. Repeat it to grow your bank \u2014 push your luck, or cash out before your memory does.",
   payoutNote: () =>
     "The machine flashes a pattern of colours; repeat it and your bank climbs. Then it is the only choice that matters: " +
     "<b>CASH OUT</b>, or <b>NEXT PASS</b> to add one more colour. Miss a pad and the whole stake is gone. " +
     "The ladder is <b>" + levels + " levels</b>, one colour each \u2014 from <b>" + seqStart + " to " + maxLenFor("seq") +
-    " colours</b> in SEQUENCE and <b>" + randStart + " to " + maxLenFor("rand") + "</b> in RANDOM \u2014 and every level pays a bigger step than the last " +
-    "(SEQUENCE <b>\u00D7" + Math.max(1.01, CONFIG.memSeqStep).toFixed(2) + " \u2192 \u00D7" + (Math.max(1.01, CONFIG.memSeqStep) + Math.max(0, CONFIG.memStepGrow) * (levels - 1)).toFixed(2) +
-    "</b>, RANDOM <b>\u00D7" + Math.max(1.02, CONFIG.memRandStep).toFixed(2) + " \u2192 \u00D7" + (Math.max(1.02, CONFIG.memRandStep) + Math.max(0, CONFIG.memStepGrow) * (levels - 1)).toFixed(2) +
-    "</b>), while the pattern flashes faster with every colour. No dice anywhere \u2014 it is your memory against the ladder.",
-
+    " colours</b> in SEQUENCE and <b>" + randStart + " to " + maxLenFor("rand") + "</b> in RANDOM. The first <b>" + knee +
+    " colours bank exactly \u00D7 1.00</b> \u2014 a push, not a win: there is no free money to compound, and every rung that does pay has to be earned. " +
+    "Past them the bank climbs properly, to <b>\u00D7" + summitSeq.toFixed(2) + "</b> in SEQUENCE and <b>\u00D7" + summitRand.toFixed(2) + "</b> in RANDOM, " +
+    "while the pattern flashes faster with every colour. No dice anywhere \u2014 it is your memory against the ladder.",
   create(app) {
     if (!state.memory || !Number.isFinite(state.memory.bestMult)) {
       state.memory = { bestLen: 0, bestMult: 1 };
     }
     if (!Number.isFinite(state.memory.bestLen) || state.memory.bestLen < 0) state.memory.bestLen = 0;
+    /* a best-mult saved under the old compounding ladder (x295) is not a record the
+       machine can still pay, so rescale it to the top of the ladder it can pay */
+    if (!Number.isFinite(state.memory.bestMult) || state.memory.bestMult > machineMax) state.memory.bestMult = machineMax;
 
-    /* How much level p pays on top of level p-1: the mode's own base step plus one
-       memStepGrow for every level already climbed. So level 1 pays x1.26 (x1.33 in
-       RANDOM) exactly as it always has, and the step widens from there -- x1.52 by
-       level 27. Level p's bank is the PRODUCT of the steps, so each level is worth
-       more than the last twice over: a bigger step times a bigger number. The ladder
-       depends only on the mode, never on the run, so it is cached per mode. */
-    const stepOf = (m) => (m === "rand"
-      ? Math.max(1.02, CONFIG.memRandStep)
-      : Math.max(1.01, CONFIG.memSeqStep));
-    const stepAt = (m, p) => stepOf(m) + Math.max(0, CONFIG.memStepGrow) * (p - 1);
-    const ladders = { seq: null, rand: null };
-    function ladderFor(m) {
-      if (!ladders[m]) {
-        const out = [1];
-        for (let p = 1; p <= levels; p++) out[p] = out[p - 1] * stepAt(m, p);
-        ladders[m] = out;
-      }
-      return ladders[m];
-    }
-    const multOf = (m, p) => round2(ladderFor(m)[clamp(Math.round(p), 0, levels)]);
+    /* the fitted ladder above; level p is level p of the mode's 19, and multOf(m, 0)
+       is 1 -- nothing banked -- so the cash-out button and the HUD can call it blind */
+    const multOf = multAt;
 
     /* Flash/gap time for a pattern of n colours: the base time shrunk by one decay
        step per colour beyond the mode's opening length. `rampFor` freezes at
@@ -491,7 +523,7 @@ export default {
         const start = startFor(mode);
         const mp = levels;
         let p = 0;
-        const chance = mode === "rand" ? 0.6 : 0.72;
+        const chance = decayFor(mode);
         while (p < mp && Math.random() < chance) p++;
         const m = p > 0 ? multOf(mode, p) : 0;
         pass = p;
@@ -572,9 +604,9 @@ export default {
         phase = "over";
         msgEl.className = "mem-msg win";
         msgEl.textContent = "BANKED \u00D7" + result.toFixed(2) + " \u2014 " + pass + " sequence" + (pass === 1 ? "" : "s") + " cleared.";
-        sfx.win(result >= 8 ? 3 : result >= 3 ? 2 : 1);
-        sfx.cash(result >= 8 ? 3 : 2);
-        if (result >= 3) app.confetti(result >= 10 ? 70 : 30);
+        sfx.win(result >= 5 ? 3 : result >= 2.5 ? 2 : 1);
+        sfx.cash(result >= 5 ? 3 : 2);
+        if (result >= 2.5) app.confetti(result >= 8 ? 70 : 30);
       } else {
         phase = "over";
       }
@@ -668,32 +700,29 @@ export default {
     function openInfoCard() {
       const lastSeq = maxLenFor("seq");
       const lastRand = maxLenFor("rand");
-      const summitSeq = multOf("seq", levels);
-      const summitRand = multOf("rand", levels);
-      const stepRoot = stepOf("seq");
-      const stepRootRand = stepOf("rand");
-      const stepTop = stepAt("seq", levels);
-      const stepTopRand = stepAt("rand", levels);
 
       /* One row per COLOUR COUNT, not per level: the two modes open at different
          lengths, so a level-keyed table would sit SEQUENCE's 3-colour first pattern
          next to RANDOM's 5-colour one and quietly lie. A length shorter than a
          mode's opening length has no payout in that mode and prints a dash. The
          first few lengths are listed one by one (that is where the walking decision
-         actually gets made), then every second colour, and always the summit.
-         The bar is the bank in LOG scale -- the ladder spans ~x26000, so a linear
-         bar would leave every early rung as a stub. */
+         actually gets made), then every second colour. The table runs to whichever mode
+         goes deepest (RANDOM, 23 colours) so that BOTH summits appear -- stopping at
+         SEQUENCE's 21 would print RANDOM's top as x7.86 and hide the x10.88 it can pay.
+         The bar is the bank in SQUARE-ROOT scale: the ladder only spans x1 to x11, so a
+         linear bar would squash every rung under the summit into an invisible stub. */
+      const lastLen = Math.max(lastSeq, lastRand);
       const lens = [];
-      for (let n = seqStart; n <= lastSeq; n++) {
-        if (n <= seqStart + 7 || n === lastSeq || n % 2 === 0) lens.push(n);
+      for (let n = seqStart; n <= lastLen; n++) {
+        if (n <= seqStart + 9 || n === lastSeq || n === lastLen || n % 2 === 0) lens.push(n);
       }
-      const at = (m, n) => (n < startFor(m) ? null : multOf(m, n - startFor(m) + 1));
-      const barW = (v) => Math.max(4, Math.round((Math.log(Math.max(v, 1.01)) / Math.log(Math.max(summitRand, 1.01))) * 100));
+      const at = (m, n) => (n < startFor(m) || n > maxLenFor(m) ? null : multOf(m, n - startFor(m) + 1));
+      const barW = (v) => Math.max(4, Math.round((Math.sqrt(Math.max(v, 1)) / Math.sqrt(Math.max(summitRand, 1))) * 100));
       const show = (v) => (v === null ? "\u2014" : "\u00D7" + v.toFixed(2));
       const ladder = el("div", { class: "ic-ladder mem" },
         ...lens.map((n) => {
           const s = at("seq", n), r = at("rand", n);
-          const top = n >= lastSeq;
+          const top = (n === lastSeq || n === lastRand);
           const ref = r === null ? s : r;
           return el("div", { class: "rung" + (top ? " top" : "") },
             el("span", { text: n + " col" }),
@@ -733,32 +762,32 @@ export default {
           ),
           sec("Two modes",
             ul([
-              "<b>SEQUENCE</b> \u2014 the same pattern, one colour longer each pass. The order you already learned stays put, so you only carry the new colour on the end. Opens at <b>" + seqStart + " colours</b> and its step climbs from <b>\u00D7" + stepRoot.toFixed(2) + "</b> to <b>\u00D7" + stepTop.toFixed(2) + "</b> across the " + levels + " levels.",
-              "<b>RANDOM</b> \u2014 the whole pattern is re-rolled at the new length every pass. Nothing carries over and every read is fresh, so it opens at <b>" + randStart + " colours</b> and its step climbs from <b>\u00D7" + stepRootRand.toFixed(2) + "</b> to <b>\u00D7" + stepTopRand.toFixed(2) + "</b>.",
+              "<b>SEQUENCE</b> \u2014 the same pattern, one colour longer each pass. The order you already learned stays put, so you only carry the new colour on the end. Opens at <b>" + seqStart + " colours</b> and its bank climbs to <b>\u00D7" + summitSeq.toFixed(2) + "</b> by the last rung.",
+              "<b>RANDOM</b> \u2014 the whole pattern is re-rolled at the new length every pass. Nothing carries over and every read is fresh, so it opens at <b>" + randStart + " colours</b> and pays more for the same length: the rung at <b>14 colours</b> is worth <b>\u00D7" + at("rand", 14).toFixed(2) + "</b> where SEQUENCE pays <b>\u00D7" + at("seq", 14).toFixed(2) + "</b>, and its summit is <b>\u00D7" + summitRand.toFixed(2) + "</b>.",
               "The mode is locked for the duration of a run, so choose it before you start.",
             ])
           ),
           sec("When to take the money",
             ul([
-              "The bank compounds and the step itself widens as you climb, so it accelerates: clear <b>7 levels</b> in SEQUENCE and you are holding <b>\u00D7" + multOf("seq", 7).toFixed(2) + "</b>; in RANDOM, <b>\u00D7" + multOf("rand", 7).toFixed(2) + "</b>.",
-              "Pushing on is worth it only while your chance of clearing the next pattern beats <b>1 \u00F7 that level's step</b> \u2014 about <b>" + Math.round(100 / stepRoot) + "%</b> on level 1 in SEQUENCE, down to <b>" + Math.round(100 / stepTop) + "%</b> by level " + levels + " (" + Math.round(100 / stepRootRand) + "% \u2192 " + Math.round(100 / stepTopRand) + "% in RANDOM). The longer you survive, the less the next level is worth risking.",
+              "The first <b>" + knee + " colours</b> bank exactly <b>\u00D7 1.00</b>: clear them, cash out, and you have risked your stake to win nothing. Every rung above them is a real bet \u2014 the bank is <b>\u00D7" + at("seq", 10).toFixed(2) + "</b> at 10 colours, <b>\u00D7" + at("seq", 14).toFixed(2) + "</b> at 14 and <b>\u00D7" + at("seq", 18).toFixed(2) + "</b> at 18 \u2014 and it climbs for the same reason the pattern gets harder.",
+              "The ladder is fitted to a <b>strong reader</b>: it pays exactly what the odds are worth to someone who clears <b>" + Math.round(decayFor("seq") * 100) + "%</b> of the extra colours in SEQUENCE (" + Math.round(decayFor("rand") * 100) + "% in RANDOM), which is a return of <b>" + Math.round(ladderRtp * 100) + "%</b> at every single rung. Clear better than that and pushing on pays; fall short and the machine is taking your money \u2014 and note the pattern is flashing faster every rung, so your odds are not standing still.",
               "Everyone believes they will remember one more colour. That belief is the house edge.",
             ])
           ),
-          sec("The summit",
+          sec("The summit, and the table maximum",
             ul([
-              "The ladder is <b>" + levels + " levels</b> long, each one a colour longer than the last: <b>" + seqStart + "\u2013" + lastSeq + " colours</b> in SEQUENCE and <b>" + randStart + "\u2013" + lastRand + "</b> in RANDOM. Clear the last one and the run cashes out on its own for <b>\u00D7" + summitSeq.toFixed(2) + "</b> in SEQUENCE or <b>\u00D7" + summitRand.toFixed(2) + "</b> in RANDOM \u2014 which is what keeps a perfect memoriser from bleeding the machine forever.",
+              "The ladder is <b>" + levels + " levels</b> long, each one a colour longer than the last: <b>" + seqStart + "\u2013" + lastSeq + " colours</b> in SEQUENCE and <b>" + randStart + "\u2013" + lastRand + "</b> in RANDOM. Clear the last one and the run cashes out by itself for <b>\u00D7" + summitSeq.toFixed(2) + "</b> in SEQUENCE or <b>\u00D7" + summitRand.toFixed(2) + "</b> in RANDOM \u2014 and that is the ceiling: no single run can ever pay more than <b>\u00D7" + machineMax.toFixed(2) + "</b>.",
+              "Because a sharp memory is worth real money here, this is also the one table with a <b>maximum of its own</b> instead of the house level limit: <b>$" + Math.round(app.tableLimit()) + "</b> right now. It climbs with your level, and it is what stops a perfect reader from staking a fortune against a ladder he cannot lose.",
               "Every colour also makes the flash <b>" + Math.round((1 - CONFIG.memFlashDecay) * 100) + "%</b> shorter and the gap <b>" + Math.round((1 - CONFIG.memGapDecay) * 100) + "%</b> shorter, until both hit their floors (<b>" + Math.round(CONFIG.memMinFlashMs) + "ms</b> a colour, " + Math.round(CONFIG.memMinGapMs) + "ms between) at roughly <b>17 colours</b>. The ramp is frozen at <b>" + speedCap + " colours</b>, so past that a pattern still gets longer but never flashes faster.",
               "There is no dice roll anywhere in this machine \u2014 the only randomness is which colours the pattern uses.",
             ])
           )
         )
       );
-
       openInfo("Neon Recall \u2014 How to Win", el("div", { class: "ic" },
         top,
         sec("Payout ladder \u2014 bank \u00D7 by pattern length (SEQUENCE / RANDOM)", ladder,
-          note("Payouts are on your stake: a \u00D7" + multOf("seq", 7).toFixed(2) + " bank on a $10 bet returns <b>" + Math.round(10 * multOf("seq", 7)) + "</b>. The ladder is <b>" + levels + " levels</b> long \u2014 one colour each \u2014 and it is locked in <b>before</b> you pay, so there is no hidden scaling. RANDOM opens at <b>" + randStart + " colours</b>, which is why the shortest patterns show a dash in its column."))
+          note("Payouts are on your stake. The first <b>" + knee + " colours</b> bank exactly \u00D7 1.00 \u2014 a push, not a win \u2014 so the ladder only starts to pay above them: a \u00D7" + at("seq", 14).toFixed(2) + " bank on a $10 bet returns <b>$" + Math.round(10 * at("seq", 14)) + "</b>. The ladder is <b>" + levels + " levels</b> long and it is locked in <b>before</b> you pay, so there is no hidden scaling. RANDOM opens at <b>" + randStart + " colours</b>, which is why the shortest patterns show a dash in its column."))
       ));
     }
 

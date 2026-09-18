@@ -6,15 +6,30 @@ import { sfx } from "../audio.js";
 
 /* =========================================================
    Ghost Muncher — one procedurally generated maze per play.
-   Clear every pellet to beat the level and collect 35% of
-   the jackpot (the jackpot is a bet multiplier that grows
-   by a quarter-multiple every play it survives).
+   Clear every pellet to beat the level and collect WIN_SHARE of
+   the jackpot. The jackpot is a bet multiplier that resets to
+   POT_BASE after every clear, grows by POT_STEP for every maze it
+   survives and stops at POT_CAP.
+
+   Those four numbers are the machine's whole economy, and they are
+   deliberately NOT free money for a good player. A clear pays
+   WIN_SHARE * pot * stake, so a player who clears every maze only
+   ever meets a reset pot and returns WIN_SHARE * POT_BASE = 0.98 --
+   under 100% no matter how good they get. Clearing less often puts
+   them on fatter pots (a loss adds POT_STEP to the jackpot), which
+   is the machine's gamble, but it cannot make up the difference:
+   the return climbs smoothly from ~0.5 (a rare clearer) to 0.98 (a
+   perfect one) and never crosses even. The old pot (base 5, step
+   0.25) paid a perfect player 1.75, which is a money printer for
+   anyone who clears better than ~55% of mazes -- the DEV-NOTES bot
+   sits at 45.6%, one good tuning pass from breaking the machine.
+   Retune in main.pjs (arcadeWinShare / PotBase / PotStep / PotCap).
    ========================================================= */
 
-const WIN_SHARE = 0.35;
-const POT_BASE = 5;
-const POT_STEP = 0.25;
-const POT_CAP = 14;
+const WIN_SHARE = clamp(CONFIG.arcadeWinShare, 0.02, 1);
+const POT_BASE = clamp(CONFIG.arcadePotBase, 0.1, 50);
+const POT_STEP = clamp(CONFIG.arcadePotStep, 0, 50);
+const POT_CAP = Math.max(POT_BASE, clamp(CONFIG.arcadePotCap, POT_BASE, 200));
 /* Difficulty lives in main.pjs (see the "ghost muncher" block there) so the machine
    can be retuned without touching this file; the DEV-NOTES entry records what each
    knob is worth. The board size must stay ODD in both directions (the generator
@@ -177,16 +192,23 @@ export default {
   action: "INSERT COIN",
   canIdle: false,
   minBet: 1,
+  /* the best a round can pay: a full-pot clear at POT_CAP, of which you collect WIN_SHARE */
+  maxWinMult: WIN_SHARE * POT_CAP,
   blurb: "One arcade maze, generated fresh every play. Clear every dot to beat it.",
   payoutNote: () =>
-    "Beat the maze and you collect <b>35% of the jackpot</b>. The jackpot is worth whatever your bet is \u00D7 the pot, " +
-    "and the pot grows by <b>0.25\u00D7</b> every play it survives (capped at <b>" + POT_CAP + "\u00D7</b>). " +
-    "You have <b>" + LIVES + " lives</b> and <b>" + TIME_LIMIT + " seconds</b>. Skill actually matters here.",
+    "Beat the maze and you collect <b>" + Math.round(WIN_SHARE * 100) + "% of the jackpot</b>. The jackpot is worth whatever your bet is \u00D7 the pot, " +
+    "and the pot grows by <b>" + POT_STEP + "\u00D7</b> for every maze it survives (capped at <b>" + POT_CAP + "\u00D7</b>), then drops back to <b>" + POT_BASE + "\u00D7</b> when you clear one. " +
+    "You have <b>" + LIVES + " lives</b> and <b>" + TIME_LIMIT + " seconds</b>. Skill actually matters here \u2014 the pot is the gamble, the maze is the skill.",
 
   create(app) {
     const NS = "http://www.w3.org/2000/svg";
 
     if (!state.arcade || !Number.isFinite(state.arcade.pot)) state.arcade = { pot: POT_BASE };
+    /* A pot carried in a save must sit inside the shipped pot range: a value from an older
+       tuning (or a hand-edited storage entry) must not be able to pay outside POT_BASE..POT_CAP,
+       which is what makes the advertised max win of WIN_SHARE * POT_CAP a real ceiling. A pot
+       that is merely fatter or leaner than the base is untouched. */
+    else state.arcade.pot = clamp(state.arcade.pot, POT_BASE, POT_CAP);
 
     const canvas = el("canvas", { class: "arcade-canvas" });
     const statusEl = el("div", { class: "arcade-status", text: "INSERT A COIN TO PLAY" });
@@ -210,7 +232,7 @@ export default {
 
     const root = stageShell(
       "Ghost Muncher",
-      "A random maze every play. Eat every dot, dodge the ghosts, collect 35% of the jackpot.",
+      "A random maze every play. Eat every dot, dodge the ghosts, collect " + Math.round(WIN_SHARE * 100) + "% of the jackpot.",
       { info: infoBtn(() => openInfoCard()) },
       el("div", { class: "arcade-wrap" },
         el("div", { class: "slot-cabinet arcade-cab" },
@@ -857,7 +879,7 @@ export default {
         state.arcade.pot = POT_BASE;
         outcome = { won: true, multiplier: info.pot * WIN_SHARE, jackpot: info.jackpot, share: info.share };
         statusEl.className = "arcade-status won";
-        statusEl.textContent = "MAZE CLEARED \u2014 you collected 35% of the " + fmt(info.jackpot) + " jackpot";
+        statusEl.textContent = "MAZE CLEARED \u2014 you collected " + Math.round(WIN_SHARE * 100) + "% of the " + fmt(info.jackpot) + " jackpot";
         app.confetti(70);
       } else {
         state.arcade.pot = clamp(state.arcade.pot + POT_STEP, POT_BASE, POT_CAP);
@@ -1032,7 +1054,7 @@ export default {
           sec("The goal",
             ul([
               "One arcade maze, generated <b>fresh every play</b> \u2014 no two boards are ever the same.",
-              "Eat <b>every pellet</b> to clear it. Clear the maze and you collect <b>35% of the jackpot</b>.",
+              "Eat <b>every pellet</b> to clear it. Clear the maze and you collect <b>" + Math.round(WIN_SHARE * 100) + "% of the jackpot</b>.",
               "The ghosts hunt the whole time. Touch one and you lose a life.",
               "The four of them <b>cannot pass through each other</b>: they queue up behind a friend and pour out of the next junction one at a time.",
               "They are slower than you, but they know the corridors \u2014 when two ways look equally close, they take the one that actually leads to you.",
@@ -1057,7 +1079,7 @@ export default {
       openInfo("Ghost Muncher \u2014 How to Win", el("div", { class: "ic" },
         top,
         sec("The jackpot", kv,
-          note("The jackpot is <b>pot \u00D7 your bet</b>, and you collect <b>" + Math.round(WIN_SHARE * 100) + "%</b> of it on a clear. Clear it and the pot drops back to " + POT_BASE + "\u00D7; fail and it climbs \u2014 so it is always worth watching."))
+          note("The jackpot is <b>pot \u00D7 your bet</b>, and you collect <b>" + Math.round(WIN_SHARE * 100) + "%</b> of it on a clear. Clear it and the pot drops back to " + POT_BASE + "\u00D7; fail and it climbs \u2014 so a fat pot is worth chasing, and an empty one is barely worth clearing. The reset pot of " + POT_BASE + "\u00D7 sits just under the " + Math.round(1 / WIN_SHARE * 100) / 100 + "\u00D7 break-even, so clearing every maze, every time, is a small slow loss rather than a living: a machine that pays a perfect player is a machine with a hole in it."))
       ));
     }
 
