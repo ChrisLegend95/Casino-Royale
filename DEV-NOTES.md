@@ -5,8 +5,6 @@ This file is the architecture map.
 
 ## How the page loads
 
-- The Perchance generator's real page is the **repo-root** `index.html` (it loads `src/styles.css`
-  and `src/main.js` by relative path).
 - `src/index.html` is a **separate copy** kept only as the GitHub Pages entry point (it loads
   `styles.css` / `main.js` with the `src/` prefix stripped). Change both when you change the shell,
   or at least keep their `<meta>`/`<title>` in sync.
