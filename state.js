@@ -46,7 +46,6 @@ export const CONFIG = {
   idleDefaultBet: cfg("idleDefaultBet", 10),
   idleXpMult: cfg("idleXpMult", 3),
   froggerBlockSec: cfg("froggerBlockSec", 0.34),
-  froggerRestSec: cfg("froggerRestSec", 3.0),
 
   // Save generation -- see the comment on `saveVersion` in main.pjs. A stored save
   // is only accepted when its `v` equals this, so bumping the knob in main.pjs
@@ -117,17 +116,25 @@ export const CONFIG = {
   levelReward: cfg("levelReward", 10),
   // ---- balance book (see main.pjs) ----
   // Luck is a per-round odds nudge, hard-capped at luckCap and tuned per machine
-  // so no game is ever pushed past 100% by it. Perk payouts are stake-bounded and
-  // tiny by design; Fortune lifts the table limits instead of the payouts.
+  // so no game is ever pushed past 100% by it. Perk payouts are stake-bounded: Fat
+  // Stacks pays up to +25% of the stake on a win (50 stacks) and Safety Net up to
+  // +10% back on a loss (20 stacks); Fortune lifts the table limits (+0.1% a stack,
+  // endless) instead of the payouts.
   levelLuck: cfg("levelLuck", 0.0006),
-  luckCoin: cfg("luckCoin", 0.004),
+  luckCoin: cfg("luckCoin", 0.005),
   luckCap: cfg("luckCap", 0.08),
-  winBonusStack: cfg("winBonusStack", 0.002),
-  rebateStack: cfg("rebateStack", 0.001),
-  limitStack: cfg("limitStack", 0.05),
+  winBonusStack: cfg("winBonusStack", 0.005),
+  rebateStack: cfg("rebateStack", 0.005),
+  limitStack: cfg("limitStack", 0.001),
   tableLimitBase: cfg("tableLimitBase", 400),
   tableLimitExp: cfg("tableLimitExp", 1.35),
   maxWinMult: cfg("maxWinMult", 1000),
+  // Cloud saves (optional Google sign-in, see cloudsave.js). On by default so the
+  // GitHub Pages build gets the button; main.pjs sets it to 0 for the Perchance
+  // build (its iframe origin needs its own OAuth entry) -- flip that knob to 1 to
+  // turn it on there too. With no client ID configured the button explains the
+  // 5-minute setup instead of signing anyone in.
+  cloudSaves: cfg("cloudSaves", 1),
   // treasure chest payouts (four of the nine chests pay, one more is a Lucky
   // Star that grants a second pick). The star's re-pick is worth the average
   // chest, so the table returns (high + gem + mid + low) / 8.
@@ -189,6 +196,9 @@ function newRun() {
     infMoney: false,
     infMoneySaved: 0,
     cheatWin: false,
+    /* when this run was last written to storage -- cloud saves use it to decide
+       which side of a two-device conflict is the newer save */
+    savedAt: Date.now(),
   };
 }
 
@@ -197,20 +207,65 @@ export const state = newRun();
 export function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 
 /* ---------- persistence ---------- */
+const SAVE_DEBOUNCE_MS = 250;
 let saveTimer = null;
-export function saveState(immediate) {
+export function saveState(immediate, opts) {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  /* `keepStamp` is for adopting a save from somewhere else (cloud / save file):
+     the incoming `savedAt` is kept so the two copies stay comparable, instead of
+     being re-stamped "now" and looking newer than the copy they came from. */
+  const keepStamp = !!(opts && opts.keepStamp);
   const write = () => {
+    if (!keepStamp) state.savedAt = Date.now();
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) { /* storage blocked */ }
+    /* the cloud sync (cloudsave.js) listens for this instead of polling */
+    emit("saved", state.savedAt);
   };
   if (immediate) write();
-  else saveTimer = setTimeout(write, 250);
+  else saveTimer = setTimeout(write, SAVE_DEBOUNCE_MS);
 }
+export const SAVE_DEBOUNCE = SAVE_DEBOUNCE_MS;
 
 /* How the last loadState() went. `wipedSave` means the save it found was written by
    a different save generation (see CONFIG.saveVersion) and was thrown away -- the
    boot code uses it to tell the player their run was reset by the update. */
 export const loadFlags = { wipedSave: false };
+
+/* Merge a parsed save object into the live state, shape-normalising every field on
+   the way. loadState() calls this after its generation check; the cloud loader
+   calls it (through applySaveObject) for a downloaded save, so both paths agree on
+   what a valid save is. Assumes `data` already passed the version + shape checks. */
+function hydrateState(data) {
+  const fresh = newRun();
+  Object.assign(state, fresh, data);
+  state.stats = Object.assign({}, fresh.stats, data.stats || {});
+  state.loan = Object.assign({}, fresh.loan, data.loan || {});
+  state.idle = Object.assign({}, fresh.idle, data.idle || {});
+  state.perks = data.perks && typeof data.perks === "object" ? Object.assign({}, data.perks) : {};
+  state.history = Array.isArray(data.history) ? data.history.slice(-HISTORY_MAX) : [];
+  state.arcade = Object.assign({ pot: 5 }, data.arcade || {});
+  state.frogger = Object.assign({ bestDepth: 0, bestMult: 1 }, data.frogger || {});
+  state.memory = Object.assign({ bestLen: 0, bestMult: 1 }, data.memory || {});
+  state.revolver = Object.assign({ bestMult: 1, runs: 0, busts: 0 }, data.revolver || {});
+  if (!state.stats.byGame || typeof state.stats.byGame !== "object") state.stats.byGame = {};
+  /* the marker must come from the save itself -- newRun()'s default would otherwise
+     make every old save look already-migrated */
+  if ((Number((data.stats || {}).byGameV) || 0) !== BYGAME_MIGRATION) {
+    migrateByGame(true);
+    state.stats.byGameV = BYGAME_MIGRATION;
+  }
+  if (!Number.isFinite(state.money)) state.money = CONFIG.startingMoney;
+  state.money = Math.round(state.money);
+  state.infMoney = !!state.infMoney;
+  state.cheatWin = !!state.cheatWin;
+  if (!Number.isFinite(state.infMoneySaved) || state.infMoneySaved < 0) state.infMoneySaved = state.money;
+  if (state.infMoney) state.money = Math.round(state.infMoneySaved);
+  if (!Number.isFinite(state.arcade.pot) || state.arcade.pot < 1) state.arcade.pot = 5;
+  if (!Number.isFinite(state.level) || state.level < 1) state.level = 1;
+  if (!Number.isFinite(state.xp) || state.xp < 0) state.xp = 0;
+  if (!Number.isFinite(state.savedAt) || state.savedAt <= 0) state.savedAt = Date.now();
+  return true;
+}
 
 export function loadState() {
   try {
@@ -226,37 +281,65 @@ export function loadState() {
       try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* storage blocked */ }
       return false;
     }
-    const fresh = newRun();
-    Object.assign(state, fresh, data);
-    state.stats = Object.assign({}, fresh.stats, data.stats || {});
-    state.loan = Object.assign({}, fresh.loan, data.loan || {});
-    state.idle = Object.assign({}, fresh.idle, data.idle || {});
-    state.perks = data.perks && typeof data.perks === "object" ? Object.assign({}, data.perks) : {};
-    state.history = Array.isArray(data.history) ? data.history.slice(-HISTORY_MAX) : [];
-    state.arcade = Object.assign({ pot: 5 }, data.arcade || {});
-    state.frogger = Object.assign({ bestDepth: 0, bestMult: 1 }, data.frogger || {});
-    state.memory = Object.assign({ bestLen: 0, bestMult: 1 }, data.memory || {});
-    state.revolver = Object.assign({ bestMult: 1, runs: 0, busts: 0 }, data.revolver || {});
-    if (!state.stats.byGame || typeof state.stats.byGame !== "object") state.stats.byGame = {};
-    /* the marker must come from the save itself — newRun()'s default would otherwise
-       make every old save look already-migrated */
-    if ((Number((data.stats || {}).byGameV) || 0) !== BYGAME_MIGRATION) {
-      migrateByGame(true);
-      state.stats.byGameV = BYGAME_MIGRATION;
-    }
-    if (!Number.isFinite(state.money)) state.money = CONFIG.startingMoney;
-    state.money = Math.round(state.money);
-    state.infMoney = !!state.infMoney;
-    state.cheatWin = !!state.cheatWin;
-    if (!Number.isFinite(state.infMoneySaved) || state.infMoneySaved < 0) state.infMoneySaved = state.money;
-    if (state.infMoney) state.money = Math.round(state.infMoneySaved);
-    if (!Number.isFinite(state.arcade.pot) || state.arcade.pot < 1) state.arcade.pot = 5;
-    if (!Number.isFinite(state.level) || state.level < 1) state.level = 1;
-    if (!Number.isFinite(state.xp) || state.xp < 0) state.xp = 0;
+    hydrateState(data);
     return true;
   } catch (e) {
     return false;
   }
+}
+
+/* ---------- cloud saves (cloudsave.js) ---------- *
+   The sync layer needs three things from here: a plain snapshot of the live run to
+   upload, the same snapshot reduced to the numbers a conflict dialog shows, and a
+   validated way to put somebody else's snapshot back into the live state. Nothing
+   in this block touches the network. */
+
+/* A deep copy of the current run, safe to JSON.stringify and hand around. */
+export function saveSnapshot() {
+  if (!Number.isFinite(state.savedAt) || state.savedAt <= 0) state.savedAt = Date.now();
+  return JSON.parse(JSON.stringify(state));
+}
+
+/* The quick facts about any saved run, local or cloud, for "you have $X at level Y"
+   comparisons. Tolerates junk input (that is the point: it runs on cloud files). */
+export function snapshotSummary(save) {
+  const s = save && typeof save === "object" ? save : {};
+  const st = s.stats && typeof s.stats === "object" ? s.stats : {};
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  return {
+    money: Math.round(num(s.money, 0)),
+    level: Math.max(1, Math.round(num(s.level, 1))),
+    plays: Math.max(0, Math.round(num(st.plays, 0))),
+    runs: Math.max(1, Math.round(num(st.runs, 1))),
+    peak: Math.round(num(st.peak, 0)),
+    bestWin: Math.round(num(st.biggestWin, 0)),
+    cheats: Math.max(0, Math.round(num(st.cheats, 0))),
+    startedAt: num(st.startedAt, 0),
+    savedAt: num(s.savedAt, 0),
+  };
+}
+
+/* Is this snapshot still an untouched run? A brand-new device writes one of these
+   the moment the page loads, so the cloud logic must never let it silently
+   overwrite a real save from another machine -- it always asks instead. */
+export function isFreshSnapshot(save) {
+  const s = snapshotSummary(save);
+  return s.money <= CONFIG.startingMoney && s.level <= 1 && s.plays === 0 && s.runs <= 1 && s.peak <= CONFIG.startingMoney;
+}
+
+/* Put a save object (already parsed) into the live state. Refuses -- without
+   touching anything -- anything that is not this save generation, or that has no
+   usable money field, so a stale or hand-mangled cloud file can never destroy the
+   run the player is holding. Returns {ok:true, summary} or {ok:false, reason}. */
+export function applySaveObject(data, opts) {
+  if (!data || typeof data !== "object") return { ok: false, reason: "shape" };
+  if ((Number(data.v) || 0) !== CONFIG.saveVersion) return { ok: false, reason: "version" };
+  if (!Number.isFinite(Number(data.money))) return { ok: false, reason: "shape" };
+  hydrateState(data);
+  saveState(true, { keepStamp: !!(opts && opts.keepStamp) });
+  emit("loaded");
+  emit("money", state.money);
+  return { ok: true, summary: snapshotSummary(state) };
 }
 
 export function clearSave() {

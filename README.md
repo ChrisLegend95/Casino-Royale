@@ -72,8 +72,10 @@ There is **no real-money gambling** involved.
 - ❌ No cash prizes
 - ❌ No payment system
 - ❌ No betting with real money
-- ❌ No personal accounts required
-- ❌ No intentional collection of personal data
+- ❌ No personal accounts required *(playing needs none; the optional cloud save below is the only
+  thing that touches a login, and it is entirely skippable)*
+- ❌ No intentional collection of personal data *by this project* — the optional cloud save talks
+  directly to the player's own Google Drive and never to any server of ours (see Privacy)
 
 All coins, rewards, bets, multipliers, and other values are fictional and have **no real-world monetary value**.
 
@@ -88,6 +90,28 @@ Privacy is an important part of this project.
 The game does not require an account and does not intentionally collect or store personal information.
 
 There is no payment system and no reason for the game to ask for financial information.
+
+### Optional cloud save
+
+There is one optional exception, and you can ignore it completely: a **"Sign in with Google"**
+button in the top bar that mirrors your save into your own Google Drive, so a run survives a
+reinstalled browser or moves to another computer.
+
+If you use it:
+
+- The page talks **directly to Google**. There is no game server and nothing is sent to the person
+  who made this game.
+- The game stores one small file (`casino-royale-save.json`) in its own hidden app folder in *your*
+  Drive — the same place other apps keep their settings. It does not appear in your normal Drive
+  list, and only this app's own client can read it.
+- It asks for two permissions: access to that app folder, and your email address so the panel can
+  show which account is signed in.
+- You can sign out or delete the cloud copy from that panel at any time; your run on the computer
+  stays where it was.
+
+If you never sign in, nothing about the game changes — your progress is always stored locally on
+your own device first, and there is a manual "download/load save file" option in the same panel for
+keeping a backup without any account at all.
 
 The goal is to let you play without needing to hand over your personal information just to spin a digital wheel.
 
@@ -108,7 +132,7 @@ The project focuses on creating fun, quick, and entertaining games where the pla
 - 🎰 Multiple casino-style games
 - 🎮 100% free to play
 - 💰 Fictional in-game currency
-- 🔒 No accounts required
+- 🔒 No accounts required *(optional Google cloud save for backup)*
 - 🛡️ No intentional personal data collection
 - 💳 No payment system
 - 🤑 No real-money gambling
@@ -158,7 +182,14 @@ Keep your money.**
 The economics of every machine, the save/version rules, the harnesses used to measure them and the
 machine-by-machine notes live in [`DEV-NOTES.md`](DEV-NOTES.md) — start there before retuning any
 number. The one-line summary: every chance machine must return **under 100%** even with every perk and
-luck bonus maxed, no single round may pay more than `maxWinMult` (1000×) the stake, and **no machine
+luck bonus maxed, **luck alone can never push a table to 100%**, no single round may pay more than
+`maxWinMult` (1000×) the stake, and **no machine
 may have a farmable outcome** — an easy, repeatable result worth more than the stake. The two ladders
 (Frogger and Neon Recall) are *fitted* to a measured reference player (see "Frogger balance & the god
 harness" and the Neon Recall note) rather than guessed, so their low rungs are a push, not free money.
+**Frogger is the one standing exception to the farmability rule**: it has no death clock any more, so
+its grass is safe indefinitely and a patient player can beat the ladder on purpose (measured ×1.19 with
+just 3s of patience, ×4.72 unbounded) — that was a deliberate trade made at the player's request, and
+`DEV-NOTES.md` records both the measurement and the non-fatal fix if the ceiling is ever wanted back.
+The money perks (Fat Stacks / Safety Net) are a separate, deliberately generous **power curve** the
+player grinds toward — see the power-curve note in `DEV-NOTES.md` before retuning them.

@@ -5,6 +5,8 @@ This file is the architecture map.
 
 ## How the page loads
 
+- The Perchance generator's real page is the **repo-root** `index.html` (it loads `src/styles.css`
+  and `src/main.js` by relative path).
 - `src/index.html` is a **separate copy** kept only as the GitHub Pages entry point (it loads
   `styles.css` / `main.js` with the `src/` prefix stripped). Change both when you change the shell,
   or at least keep their `<meta>`/`<title>` in sync.
@@ -210,16 +212,19 @@ The economics of the whole casino live in one block at the bottom of the tunable
 (search `---- balance book ----`), read by JS through `CONFIG`. **Retune the economy there, not in
 the game files** — every lever below is a `CONFIG` value and every machine reads it.
 
-- **Luck** (`levelLuck` 0.0006/level, `luckCoin` 0.004/stack, `luckCap` 0.08) is a per-round odds
+- **Luck** (`levelLuck` 0.0006/level, `luckCoin` 0.005/stack, `luckCap` 0.08) is a per-round odds
   nudge each machine applies to its *own* model, and it is **hard-capped** in `computeEffects()`.
-  The cap is reached around level 135 even with five coins, and the admin winner rig overrides luck
-  to 0.75 (which is why the rig still works). Every machine's luck coefficient is tuned so that at
-  the cap that machine still returns **less than 100%** — luck is an edge, never a printer.
-- **Perks** are small and **bounded by the stake**, never by the payout: `winBonusStack` 0.002
-  (+1% of the stake on a win at five stacks), `rebateStack` 0.001 (+0.5% of the stake back on a
-  loss), `limitStack` 0.05 (Fortune: +5% table limit per stack, forever). They apply **on top of**
-  the game's own multiplier in `applyPerks()`, so a 200× jackpot can never ride them upward.
-  Tables that opt out (`noPerks: true`, blackjack) skip them entirely.
+  Lucky Coin caps at twelve stacks (6% luck), so the cap is reached around level 35, and the admin
+  winner rig overrides luck to 0.75 (which is why the rig still works). Every machine's luck
+  coefficient is tuned so that at the cap that machine still returns **less than 100%** — luck is an
+  edge, never a printer.
+- **Perks** are **bounded by the stake**, never by the payout: `winBonusStack` 0.005 (Fat Stacks, 50
+  stacks = **+25% of the stake on a win**), `rebateStack` 0.005 (Safety Net, 20 stacks = **+10% of
+  the stake back on a loss**), `limitStack` 0.001 (Fortune: +0.1% table limit per stack, endless).
+  Stack caps live in `src/perks.js`. They apply **on top of** the game's own multiplier in
+  `applyPerks()`, so a 200× jackpot can never ride them upward — but see the power-curve note under
+  the returns table: at these sizes they are the one lever that *can* carry a high-frequency table
+  over 100%. Tables that opt out (`noPerks: true`, blackjack) skip them entirely.
 - **Table limit.** `tableLimitBase` 400 × `level^tableLimitExp` 1.35 × the Fortune multiplier. It is
   the most you may stake on **one round of any machine** (`tableLimit()` in `main.js`; a machine may
   override it down with `maxBet()`, never up), and it caps the round's LOSS as much as its win. It is
@@ -247,9 +252,12 @@ the game files** — every lever below is a `CONFIG` value and every machine rea
   $21,300 level-19 stake — the memory "guarantee" is four orders of magnitude smaller than the lottery
   tails, which is the right shape for it: bounded, and it needs both a real read and the level first.
 
-**The returns, at base and at the luck cap** (`computeEffects()` maxed: level 200, all five capped
-perks, five Lucky Coins → `luck = 0.08`). Slot/Fortune-Lines figures are exact (exhaustive 6³ table
-and a 200k-spin Monte Carlo of the shipped reel model); the rest are their own closed forms:
+**The returns, at base and at the luck cap** (`computeEffects()`: level 200, every Lucky Coin →
+`luck = 0.08`). The second column isolates **luck** — the one nudge that is hard-capped, so it is the
+column that proves no machine is pushed to 100% by an *odds* bonus. Slot/Fortune-Lines figures are
+exact (exhaustive 6³ table and a 200k-spin Monte Carlo of the shipped reel model); the rest are their
+own closed forms. The perk **payout** bonuses (Fat Stacks / Safety Net) are deliberately *not* folded
+into that column — they are a player power curve, not a house-edge term; see the note below.
 
 | machine | return at base | at the luck cap | note |
 | --- | --- | --- | --- |
@@ -259,18 +267,33 @@ and a 200k-spin Monte Carlo of the shipped reel model); the rest are their own c
 | Horse Racing | 92.00% | ≤92.74% | `payout = 0.92/p` exactly (the 1.05 floor / 60 cap never bind: `p` ∈ [0.068, 0.353]); luck only inflates your runner's rating, and the relative boost is `(1+b)/(1+p·b) ≤ 1.008` |
 | Rocket Crash | 97.00% | ≤97.48% | `P(crash ≥ m) = 0.97(1+0.06·luck)/m`, flat at every target |
 | Treasure Chests | 93.75% | 93.75% | `(chestHigh+chestGem+chestMid+chestLow)/8`; **the four prizes must sum to < 8** or it prints money |
-| Russian Roulette | 90.00% | 90.00% | best play is cash out on rung 1; the first spin already loads **2 live of 6**, so no run is a formality and CASH OUT stays locked until the first blank; `rrRake` ships at 0 so the advertised multiplier is exactly what you keep. Perks are not `noPerks`, but Safety Net's +0.5% of stake on a loss leaves the best rung at 90.5% |
+| Russian Roulette | 90.00% | 90.00% | best play is cash out on rung 1; the first spin already loads **2 live of 6**, so no run is a formality and CASH OUT stays locked until the first blank; `rrRake` ships at 0 so the advertised multiplier is exactly what you keep. Perks are not `noPerks`: Safety Net fires on the third of first spins that end in the live round, so it adds `rebate/3` to the best rung (+3.3% at the 20-stack cap: 0.900 → 0.933) |
 | Blackjack | ~99.5% | ~99.5% | honest S17 3:2 game; **`noPerks: true`** — no luck, no perks, no rigged dealer. This is the one table whose edge is genuinely thin |
 | Ghost Muncher | ≤98% (bot 83%) | — | skill; the exact return is `p · 0.35 · E[pot]`, which peaks at **98%** when `p = 1` — clearing every maze, the farmable outcome, is a 2% *loss*. See its section below |
-| Frogger Gamble | ≤0.878 of stake (99% UB, *perfect* player) | — | skill; the ten-rung ladder is the ceiling, and it is *fitted* to a measured god reach — see "Frogger balance & the god harness" below. A bot that plays carelessly returns ~0.25 |
+| Frogger Gamble | ~0.24 (myopic bot); **unbounded** for a patient player | — | skill; **cars are the only thing that can kill you** and the grass has no clock, so a patient planner's return climbs from **1.19** (3s of grass patience) to **4.72** (unlimited) — the old no-win ceiling was retired with the sweep clock at the player's request. A careless bot returns ~0.24. See "Frogger balance & the god harness" below |
 | Neon Recall | ≤95% (reference) | — | skill; a **fitted** ladder — every rung past the knee is a fair bet for the reference player, whose return is flat at 95%, and every rung up to it pays exactly ×1.00, so there is no free money. Summits ×5.01 / ×10.88; hard ceiling $21,760 a run via its own table limit |
 
-**The invariant to preserve:** every chance machine returns **< 100%** at the luck cap, no single round
-of any machine pays more than `maxWinMult` × the stake, and **no machine has a farmable outcome** — an
-easy, human-repeatable result that pays more than the stake, which a player could compound round after
-round. Blackjack is the only table close to even, and it is deliberately stripped of luck and perks for
-exactly that reason. If a future change pushes any row above 100%, or gives any machine a repeatable
-`payout > stake`, that is a money printer — fix the machine, not the table.
+**The invariants to preserve:** no single round of any machine pays more than `maxWinMult` × the stake,
+**luck alone never pushes a table to 100%** (every row above is under 100% with `luck` at its cap), and
+**no machine has a farmable outcome** — an easy, human-repeatable result that pays more than the stake,
+which a player could compound round after round. Blackjack is the only table close to even, and it is
+deliberately stripped of luck and perks for exactly that reason. **Frogger is the one documented
+exception** — its grass is safe with no clock (the player asked for cars-only deaths), so a patient
+player can wait out a clean road and beat the ladder deliberately. It is slow rather than automatic and
+it is a trade that was made on purpose, but until a clock or an idle payout decay is put back, do not
+claim the farmability audit covers all eleven machines.
+
+**Power-curve note (perk retune).** The perk *payout* bonuses are no longer tiny, and — unlike luck —
+they are not EV-neutral: a win bonus `w` adds `w · P(win)` to a round's return, a rebate `r` adds
+`r · P(loss)`, so any table winning more than ~11% of its rounds crosses 100% once Fat Stacks is deep
+enough. Concretely, Roulette's red/black (P(win) 48.6%, base 97.30%) passes 100% at **12 Fat Stacks**
+and reaches **~114.6%** with both money perks maxed (+12.2% win bonus, +5.1% rebate); Rocket Crash at a
+2× target and the other ~50%-win tables (Horse, Slots, Treasure Chests) follow a few stacks behind. So
+perks are now a *power curve* the player grinds toward, and a fully perked regular is meant to be able
+to beat the house. **If the house must ever be unbeatable again, the only lever is the perk constant** —
+lower `winBonusStack` / `rebateStack` in `main.pjs` (with their `cfg()` fallbacks in `state.js`) —
+because every machine's odds, ladder and paytable is fitted to its **base** return and must not be
+retuned to compensate.
 
 **No fast money (the farmability audit).** The average return is the *second* thing to check; the first
 is whether any single rung can be farmed. The audit, machine by machine, looks for an outcome that is
@@ -293,6 +316,14 @@ is whether any single rung can be farmed. The audit, machine by machine, looks f
   outcomes are rare per round and cannot be forced. The only per-play decisions that pay more than the
   stake are the deliberate gambles (a chip on the felt, a crash target, a chest pick), and their return
   is the row in the table above — none above 98%.
+- **Frogger now fails the audit on purpose, and that is the tradeoff to watch.** With the sweep clock
+  gone there is no cost to idling on the verge, so the "easy outcome that pays more than the stake" is
+  simply *waiting*: a patient player reads each convoy, crosses when it is clean, and banks for more than
+  ×1. It cannot be automated into an instant loop the way the old Neon Recall pass 1 could (each crossing
+  still takes real time and real hops), but a script makes it trivial, and the god table in its section
+  measures the size of it (×1.19 at 3s of patience, ×4.72 unbounded). The ladder itself is untouched — the
+  fix, if the player ever wants the ceiling back, is a **non-fatal** payout decay while idling on grass,
+  not a death clock.
 - **Tails are bounded, not grindy.** `maxWinMult` 1000 is a *lottery*, not a grind: crash's ×1,000 tail
   is about 1 round in 1,000 at a 2.00 target (and the target input itself is clamped at the max), the
   slot five-of-a-kind is rarer still, and the memory summit is ladder-capped at ×10.88. Nothing on that
@@ -684,132 +715,212 @@ use the sim to catch a broken formula, not to set the number.
 ## Frogger balance & the god harness
 
 `games/frogger-math.js` is the entire road and it has no DOM; `games/frogger.js` is the playable game
-on top of it. **This machine is the one table in the casino whose paytable is a *proof* rather than a
-closed form**, because the road is deterministic and fully on screen: a script can read every lane's
-convoy, so "the player" has to be modelled as an optimal planner. Read this before touching `TIERS`,
-`restSec`, the pocket constants or `ladderRungs`.
+on top of it. **This machine's paytable was designed as a *proof* rather than a closed form**, because
+the road is deterministic and fully on screen: a script can read every lane's convoy, so "the player"
+has to be modelled as an optimal planner. That proof is now **retired** — read the first bullet before
+believing any ceiling number in here. Touch `TIERS`, the pocket constants or `ladderRungs` only with the
+god table below in front of you.
 
 **The two rules that carry the balance.**
 
-- **`restSec` — the sweep clock (3.0s).** The verge and every grass median shelter the frog for
-  `restSec`, then the road sweeps it away (`deathKind: "swept"`, the 🌊 SWEPT card, stake gone). Without
-  a clock the traffic is fully visible, so a patient *or scripted* player could stand on a median
-  until the whole road lined up and stroll to the summit for free — the clock is what turns a patience
-  puzzle into a timed crossing. A block of nine hops plus settles is 2.88s (`hopSec` 0.2 × 9 + `settleSec`
-  0.12 × 9), so 3.0s means the player must read the traffic at a glance and go. It is the biggest
-  difficulty dial in the machine **and the dial the ladder is fitted against**: raise it and the god's
-  reach rises with it, so the ladder has to come down.
-- **Bank on grass only.** The verge and the ten medians, nowhere else. Paying per lane is a printer
-  (the god's per-lane reach stays high forever), and "bank anywhere" is worse: the landing spot is a
-  free choice, so "hop one lane, bank ×1.00" is a guaranteed even-money exit and "bank the deepest lane
-  I can legally reach" cashes every intermediate rung. Ten bankable places turn each island into a real
-  push-or-bank decision, and — crucially — make the ladder a *partition of the run's outcomes*, which
-  is what makes it boundable at all.
+- **Cars are the only thing that can kill you.** The verge and every grass median are safe ground for as
+  long as the player likes: no traffic, no collision, and **no clock**. They used to be swept away after
+  `restSec` (3.0s), and that sweep clock was the single biggest difficulty dial in the machine — remove
+  it and a patient player just waits for the road to line up. It was removed at the player's request
+  (dying to a timer on a piece of grass does not read as a road), and the honest consequence is recorded
+  below: **the ladder's old no-win ceiling died with it.**
+- **Bank on grass only.** The verge and the ten medians, nowhere else. Paying per lane is a printer (the
+  god's per-lane reach stays high forever), and "bank anywhere" is worse: the landing spot is a free
+  choice, so "hop one lane, bank ×1.00" is a guaranteed even-money exit and "bank the deepest lane I can
+  legally reach" cashes every intermediate rung. Ten bankable places turn each island into a real
+  push-or-bank decision.
 
-**The doctrine (the reason the ladder looks the way it does).** A strategy is a rule that decides, at
-each bankable island, whether to bank or push on, so the best any strategy can do is the best *banking
-schedule*, and a schedule partitions the outcomes by the deepest island reached. With `P_j` = the
-chance a perfect player reaches island j (and `P_11 = 0`):
+**The old doctrine — history, kept for the reasoning, not as a live bound.** A strategy is a rule that
+decides, at each bankable island, whether to bank or push on, so the best any strategy can do is the
+best *banking schedule*, and a schedule partitions the outcomes by the deepest island reached. With
+`P_j` = the chance a perfect player reaches island j (and `P_11 = 0`):
 
 ```
 EV(best strategy) = SUM_j (P_j - P_j+1) x rung_j   <=   rtp (0.90)
 ```
 
-Rung 1 therefore sits near `rtp / P_1` and every deeper rung can only be paid out of the thin tail of
-mass that dies before it. The old note in the source claimed `rung_i ~= rtp / P_i`, which is **not**
-the bound — it is far too generous, because it lets every island return `rtp` simultaneously on the
-same branch. If you change the ladder, check it against the SUM form, not per-rung.
+Rung 1 sat near `rtp / P_1` and every deeper rung was paid out of the thin tail of mass that dies before
+it. That SUM bound held **only because `restSec` bounded the god's patience, which bounded the reach
+curve, which bounded the sum**. With the clock gone the god can stand on the verge until the road opens
+and `P_j` goes to ~1, so the SUM no longer bounds anything: the ladder is now a *description of what the
+road pays*, not a proof that the house wins. The `rtp: 0.90` constant survives as documentation of what
+the ladder was tuned against (and the earlier note's 0.86/0.878 figures do not reproduce from this
+harness — treat them as superseded, not as a baseline). If you ever re-add a clock, check the ladder
+against the SUM form again, not per-rung.
 
-**The measurement (30k seeds with the shipped tiers; this is the fit the ladder came from).** God
-planner settings: `dt 1/200`, `waitVerge 3`, `waitMedian 3`, `horizon 110`, `sourceKill`, `slop 0`,
-`maxDepth 100`, three 10k chunks (~515s each):
+**The measurement (new model, no clock; the baseline the ladder is now judged against).** `godCurve`
+runs an exact forward DP over lane × landing-time and reports the cumulative reach at each island plus
+the EV of banking at the deepest island the planner can legally reach (`sumMult/runs` over
+`multFor(depth)`). Settings: `dt 1/100`, `slop 0`, `sourceKill`, `horizon = patience + 30`, 800 seeds
+from `777 + i*7919`, `maxDepth 100`. Reach is `P(depth >= island)`:
 
-| island | point reach | 99% Wilson upper |
-| --- | --- | --- |
-| 10 | 66.653% | 67.2834% |
-| 20 | 19.847% | 20.3877% |
-| 30 | 3.513% | 3.7691% |
-| 40 | 0.527% | 0.6332% |
-| 50 | 0.047% | 0.0860% |
-| 60 | 0.010% | 0.0352% |
-| 70/80/90/100 | 0 hits | 0.0180% (the zero-hit Wilson bound, `z²/n`) |
+| grass patience | island 10 | island 20 | island 30 | island 40 | island 50 | island 60 | god EV | maxSeen |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 3s | 66.9% | 16.9% | 2.9% | 0.6% | 0 | 0 | **1.19** | 46 |
+| 6s | 86.0% | 37.2% | 11.9% | 2.6% | 0.1% | 0 | 1.28 | 53 |
+| 10s | 94.1% | 61.4% | 27.5% | 5.5% | 0.5% | 0 | 1.35 | 54 |
+| 20s | 99.8% | 88.0% | 50.7% | 15.0% | 1.6% | 0.1% | 1.46 | 63 |
+| 40s | 100% | 97.1% | 74.3% | 36.7% | 10.0% | 0.9% | 1.61 | 66 |
+| 90s | 100% | 99.9% | 94.9% | 78.1% | 41.2% | 12.1% | 2.10 | 83 |
+| unlimited | 100% | 100% | 100% | 98.8% | 93.4% | 73.0% | **4.72** | 97 |
 
-`maxSeen` 69 (the best run reached lane 69). An earlier 4k run gave 66.7 / 19.3 / 3.4 / 0.375 / 0 — the
-sampling noise is only in the deep tail, so the fit is not fragile there.
+The unlimited row is `wait 1e6`, `dt 1/50`, `horizon 300`, 500 seeds through the same DP (island 70
+34.0%, island 80 10.6%, island 90 0.8%). The table is `dt`-stable: re-running the 3s and 20s rows at
+`dt 1/200` gives 68.0/18.2/3.5 (EV 1.20) and 99.8/89.5/53.1 (EV 1.47) with the *same* `maxSeen` (46,
+63), and every witness schedule replays clean through the shipped model — **0 mismatches** in every row
+— so these are real crossings, not DP artefacts.
 
-**The ladder.** `ladderRungs: [1.25, 1.35, 1.50, 1.75, 2.25, 3.50, 6.00, 12.00, 25.00, 50.00]`
-(one rung per island; `ladderCap` 1000 must stay equal to `maxWinMult` in `main.pjs`). Against the
-upper-bound weights that ladder gives **god EV ≤ 0.8779** (point estimate 0.860), i.e. it is fitted to
-*just* under `rtp` 0.90. Rejected neighbours, so nobody re-derives them: `[1.30 … 60]` → 0.9157
-(**over** the ceiling, do not ship) and `[1.20, 1.30, 1.45, 1.60, 2.00, 3.00, 5.00, 10.00, 22.00, 45.00]`
-→ 0.8427, the safe alternative if you ever loosen the road (it costs the player 0.05 at the first
-island and nothing else, and buys 0.035 of headroom). Note where the 0.878 comes from: 0.586 is rung 1
-× P_10, 0.224 is rung 2 × P_20, 0.047 is rung 3 × P_30, and everything from island 40 up contributes
-0.021 between them. **The ladder is a bet on the first island**, which is why the island-10 wall is
-the thing to tune.
+Read the table as the size of the hole the clock was plugging: with only 3s of grass patience the god's
+EV is already **1.19** — above the 0.90 the ladder was historically fitted to — and patience takes it to
+**4.72**. The ladder is deliberately unchanged (`[1.25, 1.35, 1.50, 1.75, 2.25, 3.50, 6.00, 12.00,
+25.00, 50.00]`; `ladderCap` 1000 must stay == `maxWinMult` in `main.pjs`): the road now rewards patience,
+and that is the trade the player asked for. If the tail ever becomes farmable in practice, the cheap
+**non-fatal** fix is a payout decay while idling on grass, not a death clock.
 
-**How much the player actually gets.** A myopic bot (the harness's `simRun`: fixed margin, no
-look-ahead, banks at the first legal place — `dt 1/180`, `margin .06`, `postMargin .06`, `panicK .35`,
-`sourceKill`, `wait 3`, 6000 runs) reaches island 10 19.75% of the time, island 20 0.60%, island 30
-0.017% (`maxSeen` 32) and returns **0.2475** of stake. That is a *floor*: a human who reads the road
-better sits between the bot and the god, so the realistic table return is roughly 0.4–0.5, with the
-hard ceiling of 0.878 reserved for a planner that does not exist. If you want the machine to *feel*
-fairer, raise the road's generosity (a longer `restSec`, more pocket) and re-fit — do **not** raise the
-rungs without re-measuring, and do not "compensate" by lowering rung 1 in isolation without re-running
-the SUM.
+**How much a real player gets.** The myopic bot (the harness's `simRun`: fixed margin, no look-ahead,
+hops when the next lane looks safe, banks at the first legal island — `dt 1/180`, `margin .06`,
+`postMargin .06`, `panicK .35`, `sourceKill`, 12000 runs) reaches island 10 **19.4%**, island 20 0.7%,
+island 30 never, and returns **0.243** of stake banking at island 10 (0.009 banking at 20). **Removing
+the clock did not move the bot at all** — measured identical reach and payout with `restSec: 3` and
+`restSec: Infinity`, because a reacting player never stands still long enough for the clock to matter.
+So the realistic return is unchanged by this change: a floor around 0.24, with a human who reads the road
+better sitting between the bot and the god. (The old "0.86 fit" was the SUM *margin* — `rung × reach` —
+not the god's EV; do not quote it as a return.)
 
-**What invalidates the fit.** Any change to `TIERS` (speeds, `cw`, convoy sizes, `carW`, gaps), any
-change to `restSec`, `blockHi`/`blockDecay`/`blockTierStep`/`blockMin`, or the collision box changes
-`P_j` and voids the 0.878. The two root knobs are `main.pjs`'s `froggerBlockSec` (0.34) and
-`froggerRestSec` (3 — write it as `3`, not `3.0`, or pjs keeps it as a string), which `create()`
-copies into `FROG_CONST`. After any such change: re-run the god survey, rebuild the upper-bound
-weights, and either re-fit or accept the new number only if it is still under 0.90.
+**The "more random" pass (variant R2, shipped).** The player also asked for less predictable traffic, so
+`TIERS` was widened: `speedJ` ×1.3, `gapVar` ×1.25, `cars` widened by ±2 (2-11 vehicles deep in the
+ladder), `cw` ×0.93 compensated by `carW` so the base car length is untouched — and in `makeLane` each
+vehicle's drawn width became multiplicative, `carW * (0.62 + r()*0.76)` (mean `carW`, so the guaranteed
+window is still set by `minGap` alone), from which five body kinds fall out: **bike** (<0.95), **car**,
+**wagon** (<1.60), **truck** (<2.00), **bus** (>=2.00, up to ~2.9 car-lengths). Every block now mixes
+three or four kinds, where before each tier drew one kind. The cost is a touch of real difficulty: the
+bot went 20.3-20.4% (shipped pre-R2, same 12k-seed setup) → **19.4%** reach at island 10 and 0.255 →
+**0.243** of stake at the first island — wider vehicles occasionally close a gap the old uniform width
+did not. The god table above is the post-R2 baseline. `minGap` and `blockSecFor` are untouched, so the
+timing puzzle itself is unchanged, which is why the shift is ~1 point and not more.
 
-**The harness (it does not ship — it lives in `scratch/`, which dies with the session).** Two files
-are uploaded so a future session can pull them back:
+**What invalidates the numbers.** Any change to `TIERS` (speeds, `cw`, convoy sizes, `carW`, gaps),
+`blockHi`/`blockDecay`/`blockTierStep`/`blockMin`, or the collision box moves the reach curve and voids
+the table. The root knob is `main.pjs`'s `froggerBlockSec` (0.34), which `create()` copies into
+`FROG_CONST`. `froggerRestSec` is **gone** (see the NOTE in `main.pjs`); nothing should add it back
+without re-running the god table, because it is what used to hold the sum down. After any such change:
+re-run the god table and the bot floor, and check that the ladder still reads honestly — there is no
+ceiling left to violate.
+
+**The harness (it does not ship — it lives in `scratch/`, which dies with the session).** Two files are
+uploaded so a future session can pull them back:
 
 - `https://user.uploads.dev/file/3f390f78e4c69016d22b6346d3862832.js` — `frog-par.js`, the parallel
-  survey: `parSurvey({mode:"god"|"bot", runs, workers, dt, seedBase, stride, waitVerge, waitMedian,
-  opts, tiers, block})`, plus `islandTable(res, z)`, `wilsonUpper`, `godEV`, `godEVUpper`, `ISLANDS`.
-  It spawns workers that `import` a data-URL copy of `frog-sweep.js` and read the *current*
-  `src/games/frogger-math.js` text, so it always measures the shipped file.
-- `https://user.uploads.dev/file/209d32db3e4428f97cd63d518db3eb7a.js` — `frog-sweep.js`, the serial
-  model harness: `applyCfg({tiers, block, dt})`, `simRun` (the myopic bot), `godReach(seed, opts)`
-  (the god planner), `clone`.
+  survey: `parSurvey({mode:"god"|"bot", runs, workers, dt, seedBase, stride, waitVerge, waitMedian, opts,
+  tiers, block})`, plus `islandTable(res, z)` (rows `{island, hits, p, up, g}`; use the cumulative
+  `p`/`up`), `wilsonUpper`, `godEV`, `godEVUpper`, `ISLANDS`. It spawns workers that `import` a data-URL
+  copy of `frog-sweep.js` and read the *current* `src/games/frogger-math.js` text, so it always measures
+  the shipped file.
+- `https://user.uploads.dev/file/f66917b6429157191ec3cdf34bcde9d0.js` — `frog-sweep.js`, the serial model
+  harness: `applyCfg({tiers, block, dt})`, `simRun` (the myopic bot), `godReach(seed, opts)` (the god
+  planner, exact forward DP), `replay(seed, path, ...)` (replays a witness schedule through the shipped
+  model), `godCurve` (the reach table + bank-at-deepest EV used above), `godLadderEV`, `ladderEV`,
+  `rungMargins`, `clone`.
 
 ```js
 const parSrc = await fs.readTextFile("scratch/frog-par.js");
 const P = await (new Function("fs","tools","return (async()=>{"+parSrc+"})()"))(fs, tools);
 const RUNGS = [1.25, 1.35, 1.50, 1.75, 2.25, 3.50, 6.00, 12.00, 25.00, 50.00];
-const r = await P.parSurvey({ mode:"god", runs:10000, workers:8, dt:1/200, waitVerge:3, waitMedian:3,
-  opts:{ maxDepth:100, horizon:110, sourceKill:true, slop:0 } });
+const r = await P.parSurvey({ mode:"god", runs:8000, workers:8, dt:1/100,
+  opts:{ maxDepth:100, horizon:33, sourceKill:true, slop:0 }, waitVerge:3, waitMedian:3 });
 P.islandTable(r, 2.326);            // per-island point + 99% upper bounds
-P.godEV(r, RUNGS); P.godEVUpper(r, RUNGS, 2.326);
+P.godEV(r, RUNGS);                  // exact EV of the ladder from the exit distribution
+```
+
+And the serial path used for the table above (it also gives the bank-at-deepest EV and the replay check):
+
+```js
+const src = await fs.readTextFile("scratch/frog-sweep.js");
+const S = await (new Function("fs","tools","return (async()=>{"+src+"})()"))(fs, tools);
+S.applyCfg({ dt: 1/100 });
+S.godCurve(800, { maxDepth:100, horizon:33, wait:3, sourceKill:true, slop:0 }, 777,
+           [10,20,30,40,50,60,70,80,90,100]);
 ```
 
 Gotchas, all of them learned the hard way:
 
-- **`godEV` used to read `res.reach[island]` — the per-lane bin — instead of the cumulative reach.**
-  It is fixed, but keep it cumulative: the planner's depth histogram has literal **zero bins at the
-  island lanes** (mass sits just past them), so a bin read always returns 0 and every ladder looks
-  free. `islandTable` (cumulative sums) is the reliable path.
-- **`waitMedian` defaults to 6.5** in `parSurvey` — always pass `waitMedian: 3` for a fit against the
-  shipped clock, or you will measure a road that no longer exists.
-- The god planner costs ~500s per 10k runs; the bot is ~1/1000 of that (`secs: 0.4` for 6000 runs), so
-  sweep bot settings freely and reserve god runs for the final number.
-- `dt` matters: the fit used `1/200`. The bot floor used `1/180`. Both are fine, but don't mix them
-  inside one table.
+- **Reach must be read cumulatively.** The planner's depth histogram has literal **zero bins at the
+  island lanes** (mass sits just past them), so a raw bin read always returns 0 and every ladder looks
+  free. `islandTable` and `godCurve` accumulate; keep it that way.
+- **`wait` is the planner's grass patience in seconds per safe lane** — it is no longer "the shipped
+  clock". `parSurvey` defaults `waitMedian` to 6.5 (i.e. a road the player never had); always pass the
+  patience you actually mean.
+- The god planner costs roughly 0.1-0.35s per run at `dt 1/100-1/200`; the bot is ~1/1000 of that, so
+  sweep the bot freely and reserve the DP for numbers you are going to write down.
+- `dt` matters a little: `1/100` and `1/200` agree to ~1-2 points of reach and exactly on `maxSeen`, but
+  don't mix `dt` inside one table.
 
-**Driving the real game in the preview** (this is the only way to check the payout end-to-end, and
-`opts.instant` cannot: `frogger` refuses instant mode and returns `{multiplier: 1}`). The controls
-listen on **`pointerdown`, not `click`** — `el.click()` does nothing to them, dispatch a
+**Driving the real game in the preview** (the only way to check the payout end-to-end; `opts.instant`
+cannot: `frogger` refuses instant mode and returns `{multiplier: 1}`). The controls listen on
+**`pointerdown`, not `click`** — `el.click()` does nothing to them, dispatch a
 `PointerEvent("pointerdown", {bubbles:true})`. Select them as **`button.fbtn.cross` / `button.fbtn.bank`**:
-a `/BANK/` text search finds the topbar's 💥 `BANKRUPT` first. And **the whole game freezes while any
-modal is open** — `paused()` returns true when `#modalLayer` is visible, so a round can sit in "GET
-READY" forever with a frozen sweep clock and the next `playRound` will silently no-op on the `playing`
-guard; hide the modal before you drive. A clean live check: patch `TIERS` to one tiny car per lane with
-`cw = [500, 500]` (a sparse convoy makes the column almost always clear), shorten `hopSec` to 0.05, set
-`frogHalfW = 0`, `mountGame("frogger")`, stake $10, then `pointerdown` the cross button until the HUD
-reads `Lanes crossed 10`, bank, and check the money: **it paid $13 on a $10 stake at ×1.25** ("BANKED
-×1.25 — 10 lanes crossed").
+a `/BANK/` text search finds the topbar's 💥 `BANKRUPT` first. And **the whole game freezes while any modal
+is open** — `paused()` returns true when `#modalLayer` is visible, so a round can sit in "GET READY"
+forever and the next `playRound` will silently no-op on the `playing` guard; hide the modal before you
+drive. A clean live check: patch `TIERS` to one tiny car per lane with `cw = [500, 500]` (a sparse convoy
+makes every column almost always clear), shorten `hopSec` to 0.05, set `frogHalfW = 0`, `mountGame("frogger")`,
+stake $10, then `pointerdown` the cross button until the HUD reads `Lanes crossed 10`, bank, and check the
+money: **it paid $13 on a $10 stake at ×1.25** ("BANKED ×1.25 — 10 lanes crossed"). With the clock gone the
+other two things worth checking live are exactly the player's complaint: **stand on the verge and then on
+island 10 for >10s and confirm nothing kills the frog**, then step into a live lane and confirm the SPLAT.
+---
 
+## Cloud saves (optional Google sign-in)
+
+`src/cloudsave.js` is self-contained: it owns the button (`#cloudBtn`, hidden unless the feature is
+on), the panel, and every network call. `src/main.js` only wires it up with three things
+(`initCloud({enabled, onApplied, canApply})`) and re-exports it as `window.casino.cloud`. It is
+feature-detected off in `main.pjs` (`cloudSaves = 0`) and on in the GitHub build (no `main.pjs`,
+so `state.js`'s `cfg("cloudSaves", 1)` fallback wins).
+
+**The contract with the rest of the game:** the local save is the truth. The cloud copy is a mirror
+of `saveSnapshot()`; nothing else in the game ever reads or writes Drive, and losing the cloud copy
+costs the player nothing. Two rules keep that true:
+
+- **Conflicts always ask, never auto-resolve.** A fresh local run (see `isFreshSnapshot`) can never
+  bury a real cloud save; the dialog pre-selects whichever side is *probably* right and a dismissed
+  dialog writes a `deferred` marker to localStorage so the same cloud revision is not re-asked (and
+  never silently overwritten) on the next load.
+- **Applying a save goes through `applySaveObject`** in `state.js`, which refuses mismatched save
+  generations, then `main.js`'s `reloadAfterCloudSave()` rebuilds the stage/nav/topbar rather than
+  patching them. `canApply` blocks the whole thing mid-round.
+
+**Fingerprints ignore `savedAt`** (`hashSave`, not `hashText(JSON.stringify(save))`). This took a
+while to get right and is worth preserving: loads, re-renders and `mountGame` all re-stamp
+`savedAt`, so hashing the whole object made two copies of an identical run look different — which
+popped pointless conflict dialogs and re-uploaded identical bytes every few minutes. `pushBlob`
+therefore skips an upload when the content hash already matches what we last synced, and
+`schedulePush` shows "synced" instead of "SYNC" in the same case. The matching cost is a
+`saveSnapshot() + JSON.stringify` per save event, which is microseconds on a ~3 KB save.
+
+**Force the upload when the player asked for it.** The identical-content shortcut must NOT apply to a
+decision the player just made (overwrite a corrupt/foreign file, keep this computer, load a save
+file, the panel's upload button): those call `pushBlob(announce, true)`. Getting this wrong is subtle
+— the corrupt cloud file stays corrupt while the UI says "synced".
+
+**`applying` mutes the `saved` hook** while a cloud save is being written into localStorage, so a
+load doesn't immediately look like a local edit and schedule a push. `loadCloud` also settles
+`S.status` on "synced" at the end — leaving it on "syncing" (which `reconcile` set on the way in) is
+easy to miss because the panel is usually closing at that moment.
+
+**Testing without Google** (the whole reason the debug bag exists): `cloud.debug.setFetch(fn)` swaps
+the network layer and `setTokenProvider(fn)` stands in for GIS, so a stub Drive can be driven from
+`page_eval`. Notes from doing it: check the multipart/PATCH branches **before** the
+`?spaces=appDataFolder` list branch in the stub, or creation returns `{files:[]}` and you get a
+misleading "Drive did not return a file id". `page_eval` needs the preamble
+`window.CASINO_CLOUD_FORCE = true` (or `?cloud`) to show the button on Perchance. And the push
+debounce is 15 s (`AUTO_PUSH_MS`) — a test that asserts the auto-upload has to wait it out.
+
+**Manual backup is deliberately first-class.** Download/load a `.json` save works signed out, which
+covers the actual reported problem (a PC that wipes browser storage) without needing a Google
+account at all.

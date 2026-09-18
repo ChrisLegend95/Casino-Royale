@@ -12,6 +12,7 @@ import {
 import { GAMES, gameById } from "./games/index.js";
 import { sfx, installGlobalSounds, isEnabled, setEnabled as setSoundEnabled, toggle as toggleSound } from "./audio.js";
 import { installMusicGesture, isMusicEnabled, toggleMusic } from "./music.js";
+import { initCloud, cloud } from "./cloudsave.js";
 
 /* =========================================================
    boot
@@ -1267,10 +1268,14 @@ function openPerkShop() {
   const grid = el("div", { class: "perk-grid" });
   const banner = el("div", { class: "shopbanner" });
 
+  const caps = PERK_ORDER
+    .filter((id) => PERKS[id].max !== Infinity)
+    .map((id) => PERKS[id].name + " " + PERKS[id].max)
+    .join(", ");
   const body = el("div", {}, banner, el("p", { class: "shop-note", html:
-    "Perks are permanent for the run and <b>stack</b> on every purchase. Most cap at 5 stacks. " +
-    "The money perks are deliberately small and pay on your <b>stake</b>, never on the payout \u2014 they nudge your odds and widen your limits, they are not an income. " +
-    "<b>Fortune</b> never caps: each stack lifts every table's maximum bet by " + (CONFIG.limitStack * 100).toFixed(0) + "%, and the price climbs each time. " +
+    "Perks are permanent for the run and <b>stack</b> on every purchase. Stack caps: " + caps + ". " +
+    "The money perks pay on your <b>stake</b>, never on the payout \u2014 they widen your limits and cushion your losses without ever riding a jackpot. " +
+    "<b>Fortune</b> never caps: each stack lifts every table's maximum bet by " + (CONFIG.limitStack * 100).toFixed(1) + "%, and the price climbs each time. " +
     "<b>MAX ALL PERKS</b> instantly maxes every capped perk, but leaves endless Fortune alone."
   }), grid);
 
@@ -1743,6 +1748,30 @@ on("money", () => { renderStats(); });
 on("perks", () => { renderPayoutNote(); });
 
 /* =========================================================
+   cloud saves (optional Google sign-in -- see cloudsave.js)
+   ========================================================= */
+/* A cloud save (or a loaded save file) replaces the whole run, so every panel that
+   mirrors that state is rebuilt rather than re-rendered: the stage is re-mounted on
+   the incoming machine, and the nav, bet panel, stats, badge and loan bar follow it.
+   `canApply` keeps this from ever firing in the middle of a round. */
+function reloadAfterCloudSave() {
+  closeAllModals();
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  moneyShown = state.money;
+  if (!Number.isFinite(state.bet) || state.bet < 1) state.bet = 10;
+  mountGame(state.machine || "slots");
+  renderTop();
+  renderStats();
+  if (state.idle.on) setIdle(true);
+}
+
+initCloud({
+  enabled: !!CONFIG.cloudSaves,
+  onApplied: reloadAfterCloudSave,
+  canApply: () => !playing,
+});
+
+/* =========================================================
    init
    ========================================================= */
 buildBetPanel();
@@ -1759,6 +1788,7 @@ window.casino = {
   setInfMoney, setCheatWin, grantMoney, maxOutFinitePerks,
   openHistoryModal, renderHistoryPanel,
   sfx, isSoundEnabled: isEnabled, setSoundEnabled, toggleSound,
+  cloud,
 };
 
 if (loanExpired()) {
