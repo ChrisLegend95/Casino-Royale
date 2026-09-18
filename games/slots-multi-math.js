@@ -4,19 +4,26 @@ export const ROWS = 3;
 export const WILD_ID = "wild";
 export const SCATTER_ID = "scatter";
 
+/* `glyph` is the emoji this symbol used to be drawn with, kept as the fallback
+   for when the artwork cannot be loaded; `sprite` is the file in src/sprites/
+   (see sprites/README.md). `banana` became `watermelon` when the symbols took
+   their artwork from the supplied sheet — the pays, weights and tiers below
+   are untouched, only the picture changed. */
 export const SYMBOLS = [
-  { id: "cherry", glyph: "\u{1F352}", w: 24, tier: 0, pay: { 3: 8, 4: 25, 5: 110 } },
-  { id: "lemon", glyph: "\u{1F34B}", w: 22, tier: 0, pay: { 3: 10, 4: 30, 5: 140 } },
-  { id: "banana", glyph: "\u{1F34C}", w: 20, tier: 0, pay: { 3: 12, 4: 35, 5: 170 } },
-  { id: "grape", glyph: "\u{1F347}", w: 18, tier: 0, pay: { 3: 15, 4: 40, 5: 230 } },
-  { id: "bell", glyph: "\u{1F514}", w: 14, tier: 1, pay: { 3: 28, 4: 110, 5: 420 } },
-  { id: "gem", glyph: "\u{1F48E}", w: 9, tier: 1, pay: { 3: 50, 4: 230, 5: 950 } },
-  { id: "seven", glyph: "7\uFE0F\u20E3", w: 5, tier: 2, pay: { 3: 100, 4: 450, 5: 700 } },
-  { id: "star", glyph: "\u2B50", w: 2.5, tier: 2, pay: { 3: 200, 4: 700, 5: 1000 } },
+  { id: "cherry", sprite: "cherry", glyph: "\u{1F352}", w: 24, tier: 0, pay: { 3: 8, 4: 25, 5: 110 } },
+  { id: "lemon", sprite: "lemon", glyph: "\u{1F34B}", w: 22, tier: 0, pay: { 3: 10, 4: 30, 5: 140 } },
+  { id: "watermelon", sprite: "watermelon", glyph: "\u{1F349}", w: 20, tier: 0, pay: { 3: 12, 4: 35, 5: 170 } },
+  { id: "grape", sprite: "grapes", glyph: "\u{1F347}", w: 18, tier: 0, pay: { 3: 15, 4: 40, 5: 230 } },
+  { id: "bell", sprite: "bell", glyph: "\u{1F514}", w: 14, tier: 1, pay: { 3: 28, 4: 110, 5: 420 } },
+  { id: "gem", sprite: "diamond", glyph: "\u{1F48E}", w: 9, tier: 1, pay: { 3: 50, 4: 230, 5: 950 } },
+  { id: "seven", sprite: "seven", glyph: "7\uFE0F\u20E3", w: 5, tier: 2, pay: { 3: 100, 4: 450, 5: 700 } },
+  { id: "star", sprite: "star", glyph: "\u2B50", w: 2.5, tier: 2, pay: { 3: 200, 4: 700, 5: 1000 } },
 ];
 
-export const WILD = { id: WILD_ID, glyph: "\u{1F0CF}", w: 4, pay: { 3: 250, 4: 800, 5: 1000 } };
-export const SCATTER = { id: SCATTER_ID, glyph: "\u{1F4A0}", w: 3.1, pay: { 3: 5, 4: 25, 5: 130 } };
+/* the wild wears the machine's own WILD banner; the scatter — which is what
+   awards the free spins — wears the BONUS banner (both row 6 of the sheet) */
+export const WILD = { id: WILD_ID, sprite: "wild", glyph: "\u{1F0CF}", w: 4, pay: { 3: 250, 4: 800, 5: 1000 } };
+export const SCATTER = { id: SCATTER_ID, sprite: "bonus", glyph: "\u{1F4A0}", w: 3.1, pay: { 3: 5, 4: 25, 5: 130 } };
 
 export const SYMBOL_BY_ID = {};
 for (const s of SYMBOLS) SYMBOL_BY_ID[s.id] = s;

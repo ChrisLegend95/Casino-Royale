@@ -3,15 +3,37 @@ import { stageShell, weightedPickIndex, SPIN_EASE_CSS, spinBlur, BLUR_TICK, rand
   SETTLE_MS, settleOffset, setSettleVars, beginSettle, endSettle, clearSettle } from "./common.js";
 import { infoBtn, openInfo, svgEl, gridMap, legend, sec, ul, note, cap, payChips } from "./infocard.js";
 import { sfx } from "../audio.js";
+import { spriteEl, spriteRow, spriteHtml, preloadSprites } from "../sprites.js";
 
+/* Each symbol has artwork in src/sprites/ (see sprites/README.md) plus the emoji
+   `glyph` it used to be drawn with. The glyph is now the FALLBACK: if the image
+   fails to load, the <img> swaps itself for the emoji (src/sprites.js), so a
+   half-uploaded sprite folder degrades to the old look instead of blank reels. */
 const SYMBOLS = [
-  { id: "cherry", glyph: "\u{1F352}", w: 30, three: 4, two: 1, leftPair: true, tier: 0 },
-  { id: "lemon", glyph: "\u{1F34B}", w: 25, three: 7, two: 0, tier: 0 },
-  { id: "bell", glyph: "\u{1F514}", w: 18, three: 14, two: 2, tier: 1 },
-  { id: "gem", glyph: "\u{1F48E}", w: 13, three: 34, two: 3, tier: 1 },
-  { id: "seven", glyph: "7\uFE0F\u20E3", w: 9, three: 60, two: 4, tier: 2 },
-  { id: "star", glyph: "\u2B50", w: 5, three: 200, two: 10, tier: 2 },
+  { id: "cherry", glyph: "\u{1F352}", sprite: "cherry", w: 30, three: 4, two: 1, leftPair: true, tier: 0 },
+  { id: "lemon", glyph: "\u{1F34B}", sprite: "lemon", w: 25, three: 7, two: 0, tier: 0 },
+  { id: "bell", glyph: "\u{1F514}", sprite: "bell", w: 18, three: 14, two: 2, tier: 1 },
+  { id: "gem", glyph: "\u{1F48E}", sprite: "diamond", w: 13, three: 34, two: 3, tier: 1 },
+  { id: "seven", glyph: "7\uFE0F\u20E3", sprite: "seven", w: 9, three: 60, two: 4, tier: 2 },
+  { id: "star", glyph: "\u2B50", sprite: "star", w: 5, three: 200, two: 10, tier: 2 },
 ];
+
+const byId = {};
+for (const s of SYMBOLS) byId[s.id] = s;
+
+/* one symbol's artwork, at a caller-chosen artwork size */
+function symIcon(s, base) {
+  return spriteEl(s.sprite, { fallback: s.glyph, base });
+}
+
+/* a piece of text with a symbol's artwork inside it: "3× <cherry> — 4x" */
+function symLine(s, before, after, base) {
+  return el("span", { class: "spr-row" },
+    before ? document.createTextNode(before) : null,
+    symIcon(s, base),
+    after ? document.createTextNode(after) : null
+  );
+}
 
 const CELL_H = 118;
 
@@ -53,11 +75,12 @@ export default {
   name: "Slots",
   icon: "\u{1F3B0}",
   action: "SPIN",
-  blurb: "Three reels, six symbols. Match three, land a premium pair, or catch \u{1F352}\u{1F352} on the first two reels.",
+  blurb: "Three reels, six symbols. Match three, land a premium pair, or catch two cherries on the first two reels.",
   payoutNote: () =>
-    'Match <b>3 symbols</b> for a big payout, a <b>pair</b> of \u{1F514}/\u{1F48E}/7\uFE0F\u20E3/\u2B50, ' +
-    'or \u{1F352}\u{1F352} on the <b>first two reels</b> \u2014 that one returns your credit (<b>1x</b>). ' +
-    'Top prize: three \u2B50 = <span class="k">200x</span>. Base return <b>95.7%</b>; Lucky Coin perks load the reels a little.',
+    'Match <b>3 symbols</b> for a big payout, a <b>pair</b> of ' +
+    spriteHtml("bell") + "/" + spriteHtml("diamond") + "/" + spriteHtml("seven") + "/" + spriteHtml("star") + ', ' +
+    'or ' + spriteHtml("cherry") + spriteHtml("cherry") + ' on the <b>first two reels</b> \u2014 that one returns your credit (<b>1x</b>). ' +
+    'Top prize: three ' + spriteHtml("star") + ' = <span class="k">200x</span>. Base return <b>95.7%</b>; Lucky Coin perks load the reels a little.',
   minBet: 1,
   /* the best triple on the paytable */
   maxWinMult: Math.max(...SYMBOLS.map((s) => s.three)),
@@ -65,7 +88,7 @@ export default {
   create(app) {
     const root = stageShell(
       "Slot Machine",
-      "Match symbols across the payline. Premium symbols pay on pairs, \u{1F352}\u{1F352} pays on the first two reels.",
+      "Match symbols across the payline. Premium symbols pay on pairs, two cherries pay on the first two reels.",
       { info: infoBtn(() => openInfoCard(), "PAY TABLE") },
       el("div", { class: "slots-wrap" },
         el("div", { class: "slot-result", id: "slotResultEl", text: "Place your bet and pull the lever" }),
@@ -87,7 +110,7 @@ export default {
             el("div", { class: "slot-pay" },
               ...SYMBOLS.slice().reverse().map((s) =>
                 el("div", { class: "paychip" },
-                  el("span", { class: "g", text: s.glyph }),
+                  symIcon(s),
                   el("b", { text: s.three + "x" }),
                   el("span", { class: "pair", text: pairLabel(s) })
                 )
@@ -108,34 +131,39 @@ export default {
       return { h, off: (h - inner) / 2 };
     }
 
-    function randGlyph(a, b) {
+    function randSym(a, b) {
       for (let i = 0; i < 14; i++) {
-        const g = SYMBOLS[(Math.random() * SYMBOLS.length) | 0].glyph;
-        if (g !== a && g !== b) return g;
+        const s = SYMBOLS[(Math.random() * SYMBOLS.length) | 0];
+        if (s.id !== a && s.id !== b) return s;
       }
-      return SYMBOLS[(Math.random() * SYMBOLS.length) | 0].glyph;
+      return SYMBOLS[(Math.random() * SYMBOLS.length) | 0];
     }
 
-    let staticGlyphs = [SYMBOLS[0].glyph, SYMBOLS[2].glyph, SYMBOLS[3].glyph];
+    let staticSyms = [SYMBOLS[0], SYMBOLS[2], SYMBOLS[3]];
     let busy = false, recenterRaf = 0;
     const blurTimers = reelEls.map(() => 0);
     const settleTimers = reelEls.map(() => 0);
     const landYs = reelEls.map(() => 0);
 
-    function setStatic(glyphs) {
-      staticGlyphs = glyphs.slice();
+    /* one drum cell: the symbol's artwork, with the emoji as its fallback */
+    function cellFor(s) {
+      return el("div", { class: "reel-cell" }, symIcon(s));
+    }
+
+    function setStatic(syms) {
+      staticSyms = syms.slice();
       reelEls.forEach((reel, i) => {
         const strip = reel.querySelector(".reel-strip");
         clear(strip);
         clearSettle(strip);
         strip.style.transition = "none";
         strip.style.filter = "";
-        strip.appendChild(el("div", { class: "reel-cell", text: glyphs[i] }));
+        strip.appendChild(cellFor(syms[i]));
         const m = metrics(reel);
         strip.style.transform = "translateY(" + (-m.off) + "px)";
       });
     }
-    setStatic(staticGlyphs);
+    setStatic(staticSyms);
 
     // The stage is often still hidden when create() runs, so the very first
     // measurement reads zero-height boxes and the resting symbols land a hair
@@ -143,7 +171,7 @@ export default {
     // again on any resize, so the row always sits on the line.
     function recenter() {
       if (busy) return;
-      setStatic(staticGlyphs);
+      setStatic(staticSyms);
     }
     let ro = null;
     if (typeof ResizeObserver !== "undefined") {
@@ -190,7 +218,7 @@ export default {
       clearSettle(reelEls[i].querySelector(".reel-strip"));
     }
 
-    function startSpin(reel, targetGlyph, dur, count) {
+    function startSpin(reel, targetSym, dur, count) {
       const strip = reel.querySelector(".reel-strip");
       clear(strip);
       clearSettle(strip);
@@ -198,11 +226,11 @@ export default {
       const rows = [];
       let prev = "";
       for (let i = 0; i < count - 1; i++) {
-        const g = randGlyph(prev, i === count - 2 ? targetGlyph : null);
-        prev = g;
-        rows.push(el("div", { class: "reel-cell", text: g }));
+        const s = randSym(prev, i === count - 2 ? targetSym.id : null);
+        prev = s.id;
+        rows.push(cellFor(s));
       }
-      rows.push(el("div", { class: "reel-cell", text: targetGlyph }));
+      rows.push(cellFor(targetSym));
       rows.forEach((r) => strip.appendChild(r));
       const m = metrics(reel);
       const idx = reelEls.indexOf(reel);
@@ -245,28 +273,28 @@ export default {
       const luck = app.effects().luck;
       const weights = weightsFor(luck);
       const ids = [];
-      const glyphs = [];
+      const syms = [];
       if (app.cheat) {
         const idx = weightedPickIndex(weights);
-        for (let i = 0; i < 3; i++) { ids.push(SYMBOLS[idx].id); glyphs.push(SYMBOLS[idx].glyph); }
+        for (let i = 0; i < 3; i++) { ids.push(SYMBOLS[idx].id); syms.push(SYMBOLS[idx]); }
       } else {
         for (let i = 0; i < 3; i++) {
           const idx = weightedPickIndex(weights);
           ids.push(SYMBOLS[idx].id);
-          glyphs.push(SYMBOLS[idx].glyph);
+          syms.push(SYMBOLS[idx]);
         }
       }
       const win = evaluate(ids);
 
       if (instant) {
-        setStatic(glyphs);
+        setStatic(syms);
       } else {
         busy = true;
         reelEls.forEach((r) => { r.classList.add("spinning"); r.classList.remove("landed"); });
         const durs = [900, 1700, 2500].map((d) => d + randInt(110));
         const counts = [18, 34, 50].map((c) => c + randInt(9));
         sfx.spin(durs[durs.length - 1]);
-        reelEls.forEach((reel, i) => startSpin(reel, glyphs[i], durs[i], counts[i]));
+        reelEls.forEach((reel, i) => startSpin(reel, syms[i], durs[i], counts[i]));
         for (let i = 0; i < reelEls.length; i++) {
           await sleep(i === 0 ? durs[0] : durs[i] - durs[i - 1]);
           stopBlur(i);
@@ -288,7 +316,7 @@ export default {
             if (navigator.vibrate) { try { navigator.vibrate(18); } catch (e) { /* blocked */ } }
           }
         }
-        staticGlyphs = glyphs.slice();
+        staticSyms = syms.slice();
       }
       busy = false;
       reelEls.forEach((r) => r.classList.remove("spinning"));
@@ -296,18 +324,21 @@ export default {
       if (win) {
         if (win.kind === 3) reelEls.forEach((r) => r.classList.add("win"));
         else reelEls.forEach((reel, i) => { if (ids[i] === win.sym.id) reel.classList.add("win"); });
-        const label = (win.kind === 3 ? "3\u00D7 " : (win.sym.leftPair ? "FIRST 2 " : "2\u00D7 ")) +
-          win.sym.glyph + "  \u2014  " + win.pay + "x";
+        const before = win.kind === 3 ? "3\u00D7 " : (win.sym.leftPair ? "FIRST 2 " : "2\u00D7 ");
+        const after = "  \u2014  " + win.pay + "x";
         resultEl.className = "slot-result win";
-        resultEl.textContent = label;
-        if (!instant) toast(label, "win", 1600);
+        clear(resultEl);
+        resultEl.appendChild(symLine(win.sym, before, after));
+        if (!instant) toast(symLine(win.sym, before, after), "win", 1600);
       } else {
         resultEl.className = "slot-result lose";
         /* two cherries on the right-hand reels look like a win but are not —
            say why instead of a bare "no match" */
         const late = ids[0] !== "cherry" && ids[1] === "cherry" && ids[2] === "cherry";
-        resultEl.textContent = glyphs.join(" ") + "  \u2014  " +
-          (late ? "\u{1F352}\u{1F352} only pays on the first two reels" : "no match");
+        clear(resultEl);
+        resultEl.appendChild(spriteRow(syms.map((s) => ({ name: s.sprite, fallback: s.glyph }))));
+        resultEl.appendChild(document.createTextNode("  \u2014  " +
+          (late ? "two cherries only pay on the first two reels" : "no match")));
       }
 
       return { multiplier: win ? win.pay : 0 };
@@ -336,14 +367,15 @@ export default {
         points: [0, 1, 2].map((c) => map.px(c) + "," + map.py(0)).join(" "),
       }));
       const capEl = cap("");
+      /* `cells` are sprite names (see sprites/README.md), drawn into the diagram */
       const scen = [
-        { label: "3 MATCH", cells: ["\u2B50", "\u2B50", "\u2B50"], win: true,
-          note: "Three of the same symbol anywhere on the payline \u2014 three \u2B50 is the top prize at <b>200\u00D7</b> your credit." },
-        { label: "PAIR", cells: ["\u{1F514}", "\u{1F514}", "\u{1F352}"], win: true,
-          note: "A <b>pair</b> pays when it's a premium symbol \u2014 \u{1F514}\u{1F514} = <b>2\u00D7</b>, and the pair of \u2B50 pays <b>10\u00D7</b>." },
-        { label: "\u{1F352}\u{1F352}", cells: ["\u{1F352}", "\u{1F352}", "\u{1F34B}"], win: true,
-          note: "The <b>first two reels</b> both \u{1F352} returns <b>1\u00D7</b> \u2014 your credit back. Move the pair to the last two reels and it pays nothing." },
-        { label: "NO WIN", cells: ["\u{1F352}", "\u{1F34B}", "\u{1F514}"], win: false,
+        { label: "3 MATCH", cells: ["star", "star", "star"], win: true,
+          note: "Three of the same symbol anywhere on the payline \u2014 three " + spriteHtml("star") + " is the top prize at <b>200\u00D7</b> your credit." },
+        { label: "PAIR", cells: ["bell", "bell", "cherry"], win: true,
+          note: "A <b>pair</b> pays when it's a premium symbol \u2014 " + spriteHtml("bell") + spriteHtml("bell") + " = <b>2\u00D7</b>, and the pair of " + spriteHtml("star") + " pays <b>10\u00D7</b>." },
+        { label: "CHERRY PAIR", cells: ["cherry", "cherry", "lemon"], win: true,
+          note: "The <b>first two reels</b> both " + spriteHtml("cherry") + " returns <b>1\u00D7</b> \u2014 your credit back. Move the pair to the last two reels and it pays nothing." },
+        { label: "NO WIN", cells: ["cherry", "lemon", "bell"], win: false,
           note: "Three <b>different</b> symbols \u2014 no match, nothing pays." },
       ];
       const lg = legend(scen.map((s, i) => ({
@@ -351,7 +383,8 @@ export default {
       })), (i) => {
         const s = scen[i == null ? 0 : i];
         map.cells[0].forEach((cellNode, c) => {
-          cellNode.textContent = s.cells[c];
+          clear(cellNode);
+          cellNode.appendChild(spriteEl(s.cells[c]));
           cellNode.classList.toggle("lit", s.win);
           if (s.win) cellNode.style.setProperty("--lc", "#f2c14e");
           else cellNode.style.removeProperty("--lc");
@@ -366,17 +399,17 @@ export default {
         el("div", { class: "ic-col" },
           sec("How a spin wins",
             ul([
-              "All three reels are read together: you win if <b>three of the same symbol</b> land on the payline, if a <b>pair</b> of a premium symbol lands, or if the first two reels are both \u{1F352}.",
+              "All three reels are read together: you win if <b>three of the same symbol</b> land on the payline, if a <b>pair</b> of a premium symbol lands, or if the first two reels are both " + spriteHtml("cherry") + ".",
               "Only your single best result pays \u2014 you never collect two prizes from one spin.",
               "The payline runs straight through the middle of all three reels.",
             ])
           ),
           sec("Pairs",
             ul([
-              "\u{1F514}, \u{1F48E}, 7\uFE0F\u20E3 and \u2B50 pay on a pair as well as a triple.",
-              "\u{1F352}\u{1F352} pays <b>1\u00D7</b> \u2014 your credit back \u2014 but only when it sits on the <b>first two reels</b>. The same pair on the last two reels pays nothing.",
-              "\u{1F34B} only pays when all three match.",
-              "\u2B50 is the long shot: <b>200\u00D7</b> a triple, <b>10\u00D7</b> a pair.",
+              spriteHtml("bell") + ", " + spriteHtml("diamond") + ", " + spriteHtml("seven") + " and " + spriteHtml("star") + " pay on a pair as well as a triple.",
+              spriteHtml("cherry") + spriteHtml("cherry") + " pays <b>1\u00D7</b> \u2014 your credit back \u2014 but only when it sits on the <b>first two reels</b>. The same pair on the last two reels pays nothing.",
+              spriteHtml("lemon") + " only pays when all three match.",
+              spriteHtml("star") + " is the long shot: <b>200\u00D7</b> a triple, <b>10\u00D7</b> a pair.",
             ])
           ),
           sec("Lucky Coin perks",
@@ -389,14 +422,18 @@ export default {
       );
 
       const pay = payChips(SYMBOLS.slice().reverse().map((s) => ({
-        glyph: s.glyph, main: s.three + "x", note: s.two ? pairLabel(s) : "no pair",
+        sprite: s.sprite, glyph: s.glyph, main: s.three + "x", note: s.two ? pairLabel(s) : "no pair",
       })));
 
       openInfo("Lucky Sevens \u2014 Pay Table", el("div", { class: "ic" },
         top,
-        sec("Pays per credit", pay, note("Three of a kind is paid per credit staked. A pair pays for the four premium symbols, and \u{1F352}\u{1F352} pays 1\u00D7 on the first two reels only \u2014 the last two pay nothing. <b>Base return is 95.7%</b> \u2014 the house keeps 4.3 cents on the dollar."))
+        sec("Pays per credit", pay, note("Three of a kind is paid per credit staked. A pair pays for the four premium symbols, and " + spriteHtml("cherry") + spriteHtml("cherry") + " pays 1\u00D7 on the first two reels only \u2014 the last two pay nothing. <b>Base return is 95.7%</b> \u2014 the house keeps 4.3 cents on the dollar."))
       ));
     }
+
+    /* warm the six symbol files before the first spin, so the opening reels
+       never flash empty (they are cached from here on — see src/sprites.js) */
+    preloadSprites(SYMBOLS.map((s) => s.sprite));
 
     return { root, play, actionLabel: "SPIN", destroy };
   },

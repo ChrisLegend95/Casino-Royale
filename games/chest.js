@@ -2,30 +2,47 @@ import { el, clear, sleep, toast } from "../ui.js";
 import { stageShell, round2 } from "./common.js";
 import { infoBtn, openInfo, gridMap, legend, sec, ul, note, cap, payChips } from "./infocard.js";
 import { CONFIG } from "../state.js";
+import { spriteEl, preloadSprites } from "../sprites.js";
 
 /* =========================================================
    Treasure Chests — nine chests, one pick per play.
 
-   Four of them pay, on a tiered table (a champion x10, a gem
-   x3, cash x2, a coin x1); ONE is a Lucky Star that hands you
-   a second pick; the other four are traps. Which chest holds
-   what is reshuffled every round.
+   Four of them pay, on a tiered table (chestHigh / chestGem /
+   chestMid / chestLow in main.pjs — the default split is a
+   champion x4, a gem x2, cash x1, a coin x0.5); ONE is a Lucky
+   Star that hands you a second pick; the other four are traps.
+   Which chest holds what is reshuffled every round.
 
    The star's second pick is worth, on average, exactly what a
    random chest is worth, so the whole table returns the sum of the
-   four prizes divided by eight:
-       non-star chests: 4 + 2 + 1 + 0.5 (+ 4 x 0) = 7.5 over 8
-       star chest     : re-pick  ->  7.5 / 8 = 0.9375
-   = 93.75% of your bet, a real house edge. The four prizes MUST
-   sum to less than 8 or the machine prints money.
+   four prizes divided by the eight non-star chests:
+       4 + 2 + 1 + 0.5 (+ 4 x 0) = 7.5 over 8  ->  93.75%
+   of your bet — a real house edge. The four prizes MUST sum to less
+   than eight or the machine prints money, so the board is nine cells
+   (four paying, four traps, one star) and never fewer. The grid in
+   styles.css is three columns because the board is three by three.
    ========================================================= */
 
 const COUNT = 9;
 const REWARD_SLOTS = 4;
-const STAR_SLOTS = 1;
 
-const TIER_ICON = ["\u{1F3C6}", "\u{1F48E}", "\u{1F4B0}", "\u{1FA99}"];
 const TIER_CLASS = ["big", "gem", "", ""];
+
+/* The chests, the prizes, the star and the traps all show artwork from
+   src/sprites/ (name table in sprites/README.md). TIER_SPRITE is the prize
+   ladder, top first, and FALLBACK is the emoji each one degrades to if its
+   file cannot be loaded -- see src/sprites.js. A closed chest is the
+   `treasure` sprite, which is what this machine is named after. */
+const TIER_SPRITE = ["trophy", "diamond", "mystery", "coin"];
+const FALLBACK = {
+  trophy: "\u{1F3C6}", diamond: "\u{1F48E}", mystery: "\u{1F4B0}", coin: "\u{1FA99}",
+  skull: "\u{1F480}", treasure: "\u{1F381}", star: "\u2B50",
+};
+
+/* one chest's icon: the artwork, or its emoji if the file is missing */
+function chestIcon(sprite) {
+  return spriteEl(sprite, { fallback: FALLBACK[sprite] });
+}
 
 function shuffled(n) {
   const a = Array.from({ length: n }, (_, i) => i);
@@ -50,7 +67,7 @@ export default {
     "<b>\u2B50 Lucky Star</b> that hands you a free second pick. The paying chests hold " +
     "<b>\u00D7" + CONFIG.chestHigh + "</b>, <b>\u00D7" + CONFIG.chestGem + "</b>, <b>\u00D7" + CONFIG.chestMid +
     "</b> and <b>\u00D7" + CONFIG.chestLow + "</b> on your bet, hidden in random chests each play. " +
-    "Expected return is <b>" + ((CONFIG.chestHigh + CONFIG.chestGem + CONFIG.chestMid + CONFIG.chestLow) / 8 * 100) + "%</b> of your bet \u2014 a real house edge, like every other table.",
+    "Expected return is <b>" + round2(((CONFIG.chestHigh + CONFIG.chestGem + CONFIG.chestMid + CONFIG.chestLow) / 8) * 100) + "%</b> of your bet \u2014 a real house edge, like every other table.",
 
   create(app) {
     let slots = new Array(COUNT).fill(0);
@@ -64,7 +81,7 @@ export default {
     const grid = el("div", { class: "chest-grid" });
 
     for (let i = 0; i < COUNT; i++) {
-      const icon = el("div", { class: "chest-icon", text: "\u{1F381}" });
+      const icon = el("div", { class: "chest-icon" }, chestIcon("treasure"));
       const mult = el("div", { class: "chest-mult", text: "" });
       const btn = el("button", {
         class: "chest",
@@ -106,6 +123,7 @@ export default {
       const spots = shuffled(COUNT);
       const mults = [CONFIG.chestHigh, CONFIG.chestGem, CONFIG.chestMid, CONFIG.chestLow];
       for (let k = 0; k < REWARD_SLOTS; k++) slots[spots[k]] = mults[k];
+      /* the ninth chest is the Lucky Star */
       star = spots[REWARD_SLOTS];
     }
 
@@ -123,7 +141,8 @@ export default {
     function resetVisual() {
       for (let i = 0; i < COUNT; i++) {
         btns[i].className = "chest";
-        iconEls[i].textContent = "\u{1F381}";
+        clear(iconEls[i]);
+        iconEls[i].appendChild(chestIcon("treasure"));
         multEls[i].textContent = "";
       }
     }
@@ -143,12 +162,17 @@ export default {
       });
     }
 
+    function setIcon(i, sprite) {
+      clear(iconEls[i]);
+      iconEls[i].appendChild(chestIcon(sprite));
+    }
+
     function revealChest(i, wasStar) {
       const btn = btns[i];
       btn.classList.add("open");
       if (i === star) {
         btn.classList.add(wasStar ? "star-spent" : "star");
-        iconEls[i].textContent = "\u2B50";
+        setIcon(i, "star");
         multEls[i].textContent = wasStar ? "used" : "PICK AGAIN";
         return;
       }
@@ -157,11 +181,11 @@ export default {
         const tier = tierOf(m);
         btn.classList.add("hit");
         if (TIER_CLASS[tier]) btn.classList.add(TIER_CLASS[tier]);
-        iconEls[i].textContent = TIER_ICON[tier];
+        setIcon(i, TIER_SPRITE[tier]);
         multEls[i].textContent = "\u00D7" + m;
       } else {
         btn.classList.add("trap");
-        iconEls[i].textContent = "\u{1F480}";
+        setIcon(i, "skull");
         multEls[i].textContent = "trap";
       }
     }
@@ -182,7 +206,6 @@ export default {
       detailEl.textContent = "";
 
       let chosen = null;
-      let picked = 0;
       while (chosen === null) {
         let i;
         if (auto) {
@@ -193,7 +216,6 @@ export default {
           i = await waitPick(spent);
         }
         if (i < 0) { busy = false; return { multiplier: 1 }; }
-        picked++;
         if (app.cheat && i !== star) {
           /* reward rig: whatever the player opened is now the top prize */
           const hi = slots.indexOf(CONFIG.chestHigh);
@@ -201,6 +223,7 @@ export default {
         }
         revealChest(i, false);
         if (i === star) {
+          /* the star pays nothing itself -- it buys another pick */
           spent.add(i);
           setEnabled(false, spent);
           msgEl.className = "chest-msg star";
@@ -268,16 +291,18 @@ export default {
       const map = gridMap(3, 3, { cell: 46, gap: 8 });
       const prizeSum = CONFIG.chestHigh + CONFIG.chestGem + CONFIG.chestMid + CONFIG.chestLow;
       const TIERS = [
-        { r: 0, c: 0, g: TIER_ICON[0], m: CONFIG.chestHigh },
-        { r: 0, c: 2, g: TIER_ICON[1], m: CONFIG.chestGem },
-        { r: 2, c: 0, g: TIER_ICON[2], m: CONFIG.chestMid },
-        { r: 2, c: 2, g: TIER_ICON[3], m: CONFIG.chestLow },
+        { r: 0, c: 0, s: TIER_SPRITE[0], m: CONFIG.chestHigh },
+        { r: 0, c: 2, s: TIER_SPRITE[1], m: CONFIG.chestGem },
+        { r: 2, c: 0, s: TIER_SPRITE[2], m: CONFIG.chestMid },
+        { r: 2, c: 2, s: TIER_SPRITE[3], m: CONFIG.chestLow },
       ];
       const TRAPS = [[0, 1], [1, 0], [1, 2], [2, 1]];
       const STAR = [1, 1];
-      const put = (r, c, glyph, lit, color) => {
+      const put = (r, c, sprite, lit, color) => {
         const node = map.cells[r][c];
-        node.textContent = glyph;
+        clear(node);
+        node.appendChild(chestIcon(sprite));
+        Object.assign(node.style, { display: "grid", placeItems: "center", lineHeight: "1" });
         node.classList.toggle("lit", !!lit);
         if (color) node.style.setProperty("--lc", color);
         else node.style.removeProperty("--lc");
@@ -296,10 +321,10 @@ export default {
       const lg = legend(modes.map((m, i) => ({ label: m.label, value: i, color: m.color })),
         (i) => {
           const mode = modes[i == null ? 0 : i];
-          for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) put(r, c, "\u{1F381}", false, null);
-          if (mode.label === "PAYS") TIERS.forEach((t) => put(t.r, t.c, t.g, true, "#37d67a"));
-          if (mode.label === "TRAPS") TRAPS.forEach(([r, c]) => put(r, c, "\u{1F480}", true, "#ff5f6d"));
-          if (mode.label === "STAR") put(STAR[0], STAR[1], "\u2B50", true, "#f2c14e");
+          for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) put(r, c, "treasure", false, null);
+          if (mode.label === "PAYS") TIERS.forEach((t) => put(t.r, t.c, t.s, true, "#37d67a"));
+          if (mode.label === "TRAPS") TRAPS.forEach(([r, c]) => put(r, c, "skull", true, "#ff5f6d"));
+          if (mode.label === "STAR") put(STAR[0], STAR[1], "star", true, "#f2c14e");
           capEl.innerHTML = mode.note;
         }, null, 0);
 
@@ -333,18 +358,21 @@ export default {
       );
 
       const pay = payChips([
-        { glyph: TIER_ICON[0], main: "\u00D7" + CONFIG.chestHigh, note: "one chest" },
-        { glyph: TIER_ICON[1], main: "\u00D7" + CONFIG.chestGem, note: "one chest" },
-        { glyph: TIER_ICON[2], main: "\u00D7" + CONFIG.chestMid, note: "one chest" },
-        { glyph: TIER_ICON[3], main: "\u00D7" + CONFIG.chestLow, note: "one chest" },
-        { glyph: "\u2B50", main: "RE-PICK", note: "one chest", cls: "scat" },
+        { sprite: TIER_SPRITE[0], glyph: FALLBACK.trophy, main: "\u00D7" + CONFIG.chestHigh, note: "one chest" },
+        { sprite: TIER_SPRITE[1], glyph: FALLBACK.diamond, main: "\u00D7" + CONFIG.chestGem, note: "one chest" },
+        { sprite: TIER_SPRITE[2], glyph: FALLBACK.mystery, main: "\u00D7" + CONFIG.chestMid, note: "one chest" },
+        { sprite: TIER_SPRITE[3], glyph: FALLBACK.coin, main: "\u00D7" + CONFIG.chestLow, note: "one chest" },
+        { sprite: "star", glyph: FALLBACK.star, main: "RE-PICK", note: "one chest", cls: "scat" },
       ]);
 
       openInfo("Treasure Chests \u2014 How to Win", el("div", { class: "ic" },
         top,
-        sec("Pays on your bet", pay, note("Prizes are on your stake, not per credit \u2014 so \u00D7" + CONFIG.chestHigh + " on a $10 bet pays $100."))
+        sec("Pays on your bet", pay, note("Prizes are on your stake, not per credit \u2014 so \u00D7" + CONFIG.chestHigh + " on a $10 bet pays $" + (10 * CONFIG.chestHigh) + "."))
       ));
     }
+
+    /* the closed chests paint their artwork on the first frame, not after it */
+    preloadSprites(["treasure", "skull", "star"].concat(TIER_SPRITE));
 
     return { root, play, actionLabel: "OPEN A CHEST", destroy };
   },

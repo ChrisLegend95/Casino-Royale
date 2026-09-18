@@ -1,4 +1,5 @@
 import { el, modal } from "../ui.js";
+import { spriteEl } from "../sprites.js";
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -57,10 +58,14 @@ export function examples(...rows) {
   return el("div", { class: "ic-examples" }, ...rows);
 }
 
+/* A chip in a paytable: an optional symbol, the payout, and a qualifier.
+   `sprite` is the artwork name from src/sprites/ and wins over `glyph`,
+   which is then only the fallback if that file cannot be loaded. */
 export function payChips(items) {
   return el("div", { class: "ml-pay" }, ...items.map((it) =>
     el("div", { class: "mlchip" + (it.cls ? " " + it.cls : "") },
-      it.glyph ? el("span", { class: "g", text: it.glyph }) : null,
+      it.sprite ? spriteEl(it.sprite, { fallback: it.glyph })
+        : it.glyph ? el("span", { class: "g", text: it.glyph }) : null,
       el("span", { class: "triple", text: it.main }),
       it.note ? el("span", { class: "note", text: it.note }) : null
     )

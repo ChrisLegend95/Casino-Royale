@@ -4,9 +4,25 @@ import { stageShell, round2, SPIN_EASE_CSS, spinBlur, BLUR_TICK,
 import { infoBtn, openInfo } from "./infocard.js";
 import { sfx } from "../audio.js";
 import {
-  REELS, ROWS, LINES, MAX_LINES, SYMBOLS, WILD, SCATTER, PAYROW,
+  REELS, ROWS, LINES, MAX_LINES, SCATTER, PAYROW, SYMBOL_BY_ID,
   resolveSpinSequence, spinWinUnits, freeSpinsFor,
 } from "./slots-multi-math.js";
+import { spriteEl, spriteHtml, preloadSprites } from "../sprites.js";
+
+/* Every symbol carries artwork in src/sprites/ (sprites/README.md) alongside the
+   emoji `glyph` it used to be drawn with. The glyph is now the FALLBACK: if an
+   image fails to load the <img> swaps itself for the emoji (src/sprites.js), so
+   a partly-uploaded sprite folder degrades to the old look, not blank reels. */
+function symOf(id) {
+  return SYMBOL_BY_ID[id] || { id, sprite: null, glyph: "?" };
+}
+
+/* one symbol's artwork, at a caller-chosen artwork size (and a plain glyph if
+   a symbol somehow has no sprite assigned) */
+function symIcon(s, base) {
+  if (!s.sprite) return el("span", { class: "spr-fallback", text: s.glyph });
+  return spriteEl(s.sprite, { fallback: s.glyph, base });
+}
 
 const NS = "http://www.w3.org/2000/svg";
 const LINE_OPTIONS = [1, 3, 5, 9];
@@ -41,8 +57,8 @@ export default {
   blurb: "Five drums, three rows, nine paylines. Pays are per line bet.",
   payoutNote: () =>
     "Land <b>3, 4 or 5</b> matching symbols from the left edge of any of your paylines. " +
-    "\u{1F0CF} is <b>wild</b>, and pays on its own line too. " +
-    "\u{1F4A0} pays <b>\u00D7 total bet</b> anywhere, and <b>3 or more</b> launch up to <b>20 free spins</b>. " +
+    spriteHtml("wild") + " is <b>wild</b>, and pays on its own line too. " +
+    spriteHtml("bonus") + " pays <b>\u00D7 total bet</b> anywhere, and <b>3 or more</b> launch up to <b>20 free spins</b>. " +
     "All pays above are <b>per line bet</b>. Base return <b>~93%</b>; the biggest line pays <b>1000\u00D7</b>.",
   minBet: 1,
 
@@ -84,12 +100,12 @@ export default {
           el("div", { class: "ml-pay" },
             ...[...PAYROW].reverse().map((s) =>
               el("div", { class: "mlchip" },
-                el("span", { class: "g", text: s.glyph }),
+                symIcon(s),
                 el("span", { class: "triple", text: s.pay[3] + " \u00B7 " + s.pay[4] + " \u00B7 " + s.pay[5] })
               )
             ),
             el("div", { class: "mlchip scat" },
-              el("span", { class: "g", text: SCATTER.glyph }),
+              symIcon(SCATTER),
               el("span", { class: "triple", text: SCATTER.pay[3] + " \u00B7 " + SCATTER.pay[4] + " \u00B7 " + SCATTER.pay[5] }),
               el("span", { class: "note", text: "\u00D7 total bet" })
             )
@@ -127,31 +143,24 @@ export default {
       return Number.isFinite(h) && h > 0 ? h : c.offsetHeight || 40;
     }
 
-    function cell(glyph) {
-      return el("div", { class: "mlcell", text: glyph });
+    function cell(sym) {
+      return el("div", { class: "mlcell" }, symIcon(sym));
     }
 
-    function setStrip(i, glyphs) {
+    function setStrip(i, syms) {
       const strip = strips[i];
       clear(strip);
       clearSettle(strip);
       strip.style.transition = "none";
       strip.style.transform = "translateY(0)";
       strip.style.filter = "";
-      for (const g of glyphs) strip.appendChild(cell(g));
+      for (const s of syms) strip.appendChild(cell(s));
     }
 
     function showGrid(grid) {
       for (let i = 0; i < REELS; i++) {
-        setStrip(i, [grid[0][i], grid[1][i], grid[2][i]].map((id) => glyphOf(id)));
+        setStrip(i, [grid[0][i], grid[1][i], grid[2][i]].map(symOf));
       }
-    }
-
-    function glyphOf(id) {
-      if (id === WILD.id) return WILD.glyph;
-      if (id === SCATTER.id) return SCATTER.glyph;
-      const s = SYMBOLS.find((x) => x.id === id);
-      return s ? s.glyph : "?";
     }
 
     let blurTimers = reels.map(() => 0);
@@ -223,8 +232,8 @@ export default {
       clearSettle(strip);
       strip.style.filter = "";
       const total = Math.max(6, count);
-      for (let k = 0; k < total - ROWS; k++) strip.appendChild(cell(glyphOf(RND_SYMBOL())));
-      for (const id of [grid[0][i], grid[1][i], grid[2][i]]) strip.appendChild(cell(glyphOf(id)));
+      for (let k = 0; k < total - ROWS; k++) strip.appendChild(cell(symOf(RND_SYMBOL())));
+      for (const id of [grid[0][i], grid[1][i], grid[2][i]]) strip.appendChild(cell(symOf(id)));
       const h = cellH();
       const landY = -(total - ROWS) * h;
       const over = settleOffset(h);
@@ -371,13 +380,26 @@ export default {
     };
 
     function detailFor(ev) {
-      const parts = [];
+      clear(detailEl);
+      const bits = [];
       for (const win of ev.wins.slice(0, 5)) {
-        parts.push("L" + (win.line + 1) + " " + glyphOf(win.symId) + "\u00D7" + win.run + " <b>" + win.pay + "</b>");
+        bits.push(el("span", { class: "mlbit" },
+          document.createTextNode("L" + (win.line + 1) + " "),
+          symIcon(symOf(win.symId)),
+          el("span", { html: "\u00D7" + win.run + " <b>" + win.pay + "</b>" })
+        ));
       }
-      if (ev.scatterCount >= 3) parts.push(SCATTER.glyph + "\u00D7" + ev.scatterCount + " <b>" + ev.scatterPay + "\u00D7 total</b>");
-      if (ev.wins.length > 5) parts.push("+" + (ev.wins.length - 5) + " more");
-      detailEl.innerHTML = parts.join(" \u00B7 ");
+      if (ev.scatterCount >= 3) {
+        bits.push(el("span", { class: "mlbit" },
+          symIcon(SCATTER),
+          el("span", { html: "\u00D7" + ev.scatterCount + " <b>" + ev.scatterPay + "\u00D7 total</b>" })
+        ));
+      }
+      if (ev.wins.length > 5) bits.push(el("span", { text: "+" + (ev.wins.length - 5) + " more" }));
+      bits.forEach((b, i) => {
+        if (i) detailEl.appendChild(document.createTextNode(" \u00B7 "));
+        detailEl.appendChild(b);
+      });
     }
 
     function resetLive() {
@@ -509,8 +531,10 @@ export default {
         "</b> per line, so a spin costs <b>" + fmt(per * live) + "</b>." });
 
       const example = (cells, note) => el("div", { class: "ic-ex" },
-        el("div", { class: "ic-excells" }, ...cells.map((g) =>
-          el("div", { class: "ic-excell" + (g === "" ? " blank" : " win"), text: g })
+        el("div", { class: "ic-excells" }, ...cells.map((id) =>
+          id === ""
+            ? el("div", { class: "ic-excell blank" })
+            : el("div", { class: "ic-excell win" }, symIcon(symOf(id)))
         )),
         el("div", { class: "ic-exnote", html: note })
       );
@@ -518,12 +542,12 @@ export default {
       const payChips = el("div", { class: "ml-pay" },
         ...[...PAYROW].reverse().map((s) =>
           el("div", { class: "mlchip" },
-            el("span", { class: "g", text: s.glyph }),
+            symIcon(s),
             el("span", { class: "triple", text: s.pay[3] + " \u00B7 " + s.pay[4] + " \u00B7 " + s.pay[5] })
           )
         ),
         el("div", { class: "mlchip scat" },
-          el("span", { class: "g", text: SCATTER.glyph }),
+          symIcon(SCATTER),
           el("span", { class: "triple", text: SCATTER.pay[3] + " \u00B7 " + SCATTER.pay[4] + " \u00B7 " + SCATTER.pay[5] }),
           el("span", { class: "note", text: "\u00D7 total bet" })
         )
@@ -538,9 +562,9 @@ export default {
               el("ul", {},
                 el("li", { html: "Match <b>3, 4 or 5</b> of the same symbol along a live payline, starting on the <b>leftmost drum</b>." }),
                 el("li", { html: "The run stops at the first drum that doesn\u2019t match \u2014 5 in a row pays the 5 value, 3 in a row pays the 3 value." }),
-                el("li", { html: WILD.glyph + " <b>Wild</b> substitutes for any symbol, so a line can start with one; a line of nothing but wilds pays the wild row." }),
+                el("li", { html: spriteHtml("wild") + " <b>Wild</b> substitutes for any symbol, so a line can start with one; a line of nothing but wilds pays the wild row." }),
                 el("li", { html: "Each payline is paid separately, so a single spin can win on several lines at once." }),
-                el("li", { html: SCATTER.glyph + " <b>Scatter</b> ignores the paylines \u2014 3 or more anywhere on the drums pay <b>\u00D7 total bet</b> and launch free spins." })
+                el("li", { html: spriteHtml("bonus") + " <b>Scatter</b> ignores the paylines \u2014 3 or more anywhere on the drums pay <b>\u00D7 total bet</b> and launch free spins." })
               )
             ),
             el("div", { class: "ic-sec" },
@@ -557,21 +581,21 @@ export default {
         el("div", { class: "ic-sec" },
           el("h3", { text: "What counts as a win" }),
           el("div", { class: "ic-examples" },
-            example(["\u{1F352}", "\u{1F352}", "\u{1F352}", "\u{1F34B}", "\u{1F34B}"],
+            example(["cherry", "cherry", "cherry", "lemon", "lemon"],
               "3 cherries from the left = <b>8</b> per line bet. The lemon on drum 4 breaks the run, so it can\u2019t extend it."),
-            example(["\u{1F0CF}", "\u{1F352}", "\u{1F352}", "\u{1F352}", "\u{1F34B}"],
+            example(["wild", "cherry", "cherry", "cherry", "lemon"],
               "The wild fills in \u2014 this line reads as <b>4 cherries</b> = <b>25</b> per line bet."),
-            example(["\u{1F352}", "\u{1F352}", "\u{1F34B}", "\u{1F352}", "\u{1F352}"],
+            example(["cherry", "cherry", "lemon", "cherry", "cherry"],
               "No win. The match has to start on drum 1, and the lemon on drum 3 stops it at 2."),
-            example(["\u{1F4A0}", "", "", "\u{1F4A0}", "\u{1F4A0}"],
-              "3 or more " + SCATTER.glyph + " anywhere at all pay <b>\u00D7 total bet</b> \u2014 no payline needed \u2014 and award free spins.")
+            example(["scatter", "", "", "scatter", "scatter"],
+              "3 or more " + spriteHtml("bonus") + " anywhere at all pay <b>\u00D7 total bet</b> \u2014 no payline needed \u2014 and award free spins.")
           )
         ),
         el("div", { class: "ic-sec" },
           el("h3", { text: "Pays per line bet" }),
           payChips,
           el("div", { class: "ic-fs", html:
-            SCATTER.glyph + " <b>3</b> scatters \u2192 <b>10</b> free spins \u00B7 <b>4</b> \u2192 <b>15</b> \u00B7 <b>5</b> \u2192 <b>20</b>. " +
+            spriteHtml("bonus") + " <b>3</b> scatters \u2192 <b>10</b> free spins \u00B7 <b>4</b> \u2192 <b>15</b> \u00B7 <b>5</b> \u2192 <b>20</b>. " +
             "Free spins run on the same paylines and can retrigger." })
         )
       );
@@ -589,8 +613,8 @@ export default {
 
     showGrid([
       ["cherry", "grape", "gem", "lemon", "star"],
-      ["lemon", "bell", "cherry", "banana", "gem"],
-      ["grape", "seven", "banana", "cherry", "bell"],
+      ["lemon", "bell", "cherry", "watermelon", "gem"],
+      ["grape", "seven", "watermelon", "cherry", "bell"],
     ]);
 
     async function play(stake, opts) {
@@ -658,7 +682,10 @@ export default {
 
         if (seq.freeAwarded > 0 && isBase && !instant) {
           showBanner(seq.freeAwarded + " FREE SPINS");
-          toast(seq.freeAwarded + " FREE SPINS \u2014 " + SCATTER.glyph + " pays \u00D7 total bet", "gold", 3200);
+          toast(el("span", { class: "spr-row" },
+            document.createTextNode(seq.freeAwarded + " FREE SPINS \u2014 "),
+            symIcon(SCATTER),
+            document.createTextNode(" pays \u00D7 total bet")), "gold", 3200);
           await wait(1250);
           freeEl.hidden = true;
         } else if (more && !instant) {
@@ -688,6 +715,10 @@ export default {
 
       return { multiplier: seq.multiplier };
     }
+
+    /* the drums paint their artwork on the very first frame rather than
+       flashing empty on the first spin */
+    preloadSprites(PAYROW.map((s) => s.sprite).concat(SCATTER.sprite));
 
     return {
       root,
