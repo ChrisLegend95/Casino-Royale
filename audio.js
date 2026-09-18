@@ -541,6 +541,55 @@ const bank = {
     noise({ dur: 0.5, vol: 0.06, freq: 900, q: 0.35, type: "bandpass", attack: 0.18, delay: 0.08 });
   },
 
+  /* ---------- texas hold'em ---------- */
+  /* a card sliding off the top of the deck and hitting the felt */
+  deal(delay = 0) {
+    noise({ dur: 0.07, vol: 0.1, freq: 2600, q: 0.8, type: "highpass", delay });
+    noise({ dur: 0.05, vol: 0.09, freq: 420, q: 0.6, type: "lowpass", delay: delay + 0.03 });
+    tone({ freq: 620, dur: 0.02, type: "square", vol: 0.05, delay: delay + 0.02, slide: 380 });
+  },
+
+  /* chips moving: one ceramic clack, or a short rattle when you push a stack */
+  chip(n = 1, delay = 0) {
+    const k = Math.max(1, Math.min(9, Math.round(n) || 1));
+    for (let i = 0; i < k; i++) {
+      const d = delay + i * (0.035 + Math.random() * 0.022);
+      const f = 2300 + Math.random() * 1900;
+      noise({ dur: 0.035, vol: 0.1, freq: f, q: 1.7, type: "bandpass", delay: d });
+      tone({ freq: f * 0.5, dur: 0.03, type: "triangle", vol: 0.045, delay: d + 0.003, slide: f * 0.32 });
+    }
+  },
+
+  /* knuckles on the felt - the check */
+  knock(delay = 0) {
+    noise({ dur: 0.045, vol: 0.17, freq: 240, q: 0.9, type: "lowpass", delay });
+    tone({ freq: 150, dur: 0.06, type: "triangle", vol: 0.12, slide: 96, delay });
+    noise({ dur: 0.045, vol: 0.14, freq: 230, q: 0.9, type: "lowpass", delay: delay + 0.11 });
+    tone({ freq: 140, dur: 0.07, type: "triangle", vol: 0.1, slide: 90, delay: delay + 0.11 });
+  },
+
+  /* cards sliding face-down away into the muck */
+  fold() {
+    noise({ dur: 0.13, vol: 0.11, freq: 1500, q: 0.6, type: "bandpass", attack: 0.02 });
+    noise({ dur: 0.08, vol: 0.07, freq: 520, q: 0.7, type: "lowpass", delay: 0.05 });
+  },
+
+  /* every chip the seat has, pushed forward */
+  allin() {
+    tone({ freq: 160, dur: 0.14, type: "sawtooth", vol: 0.16, slide: 96 });
+    noise({ dur: 0.1, vol: 0.14, freq: 700, q: 0.6, type: "lowpass" });
+    bank.chip(9, 0.02);
+    [880, 1109, 1319].forEach((n, i) =>
+      tone({ freq: n, dur: 0.1, type: "square", vol: 0.13, delay: 0.1 + i * 0.07 }));
+  },
+
+  /* the pot is pushed to the winner: a wide ceramic cascade */
+  pot(tier = 1) {
+    bank.chip(tier >= 3 ? 9 : tier === 2 ? 6 : 4, 0);
+    bank.chip(tier >= 2 ? 6 : 3, 0.24);
+    if (tier >= 3) bank.chip(6, 0.5);
+  },
+
   /* the dealer snaps a fresh cylinder in: latch out, latch home */
   reload() {
     noise({ dur: 0.05, vol: 0.15, freq: 2400, q: 1.5, type: "bandpass" });

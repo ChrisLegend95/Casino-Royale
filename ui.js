@@ -77,10 +77,13 @@ export function flavor(listName) {
 }
 
 /* ---------- toasts ---------- */
+/* `msg` is usually a string, but a Node is allowed so a message can carry
+   symbol artwork (see src/sprites.js) without giving up the toast styling. */
 export function toast(msg, kind = "info", ms = 2400) {
   const layer = document.getElementById("toastLayer");
   if (!layer) return;
-  const node = el("div", { class: "toast " + kind, text: msg });
+  const node = el("div", { class: "toast " + kind },
+    msg instanceof Node ? msg : document.createTextNode(String(msg)));
   layer.appendChild(node);
   setTimeout(() => {
     node.classList.add("out");
@@ -232,6 +235,22 @@ export function confirmDialog(title, message, okLabel = "Confirm", okCls = "red"
 }
 
 /* ---------- misc ---------- */
+
+/* Where the privacy policy lives (privacy.html -- also the "Application privacy
+   policy link" on the Google OAuth consent screen). On the static mirror the page
+   sits right beside this one, so a relative link is the correct one there, and it
+   survives a repo rename or a fork. Inside the Perchance iframe there is no such
+   file next to the page, so it points at the published GitHub Pages copy instead. */
+const MIRROR_PRIVACY_URL = "https://chrislegend95.github.io/Casino-Royale/privacy.html";
+export function privacyUrl() {
+  try {
+    if (location.protocol === "http:" || location.protocol === "https:") {
+      return /perchance\.org$/i.test(location.hostname) ? MIRROR_PRIVACY_URL : "privacy.html";
+    }
+  } catch (e) { /* fall through */ }
+  return MIRROR_PRIVACY_URL;
+}
+
 export function animateNumber(node, from, to, ms = 550, formatter = fmt) {
   if (!node) return;
   const t0 = performance.now();

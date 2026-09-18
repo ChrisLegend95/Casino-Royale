@@ -47,7 +47,7 @@ export const PERKS = {
     max: 5,
     baseCost: 250,
     growth: 1.6,
-    blurb: "Learn the tables faster. Levels pay a bonus and widen your table limits.",
+    blurb: "Learn the tables faster \u2014 every hand pays more XP, so levels (and the table limit that comes with them) arrive sooner.",
     effect: (n) => ({ xpMult: n * 0.25 }),
     stacks: (n) => `+${n * 25}% XP gain`,
   },
@@ -57,9 +57,9 @@ export const PERKS = {
     max: Infinity,
     baseCost: 400,
     growth: 1.35,
-    blurb: "Raw reward. Every stack lifts every table's maximum bet by 0.1%, forever \u2014 more on the felt, same odds. Never stops getting more expensive.",
-    effect: (n) => ({ limitMult: n * CONFIG.limitStack }),
-    stacks: (n) => `table limits +${(n * CONFIG.limitStack * 100).toFixed(1)}%`,
+    blurb: "Raw reward. Every stack lifts every table's profit by 0.1%, forever \u2014 same odds, bigger reward. Never stops getting more expensive.",
+    effect: (n) => ({ profitBonus: n * CONFIG.profitStack }),
+    stacks: (n) => `+${(n * CONFIG.profitStack * 100).toFixed(1)}% profit on a win`,
   },
 };
 
@@ -83,7 +83,7 @@ export function perkCost(id) {
 }
 
 export function computeEffects() {
-  const e = { luck: 0, winBonus: 0, rebate: 0, xpMult: 1, idleSpeed: 1, limitMult: 1 };
+  const e = { luck: 0, winBonus: 0, rebate: 0, profitBonus: 0, xpMult: 1, idleSpeed: 1 };
   e.luck += Math.max(0, state.level - 1) * CONFIG.levelLuck;
   for (const id of Object.keys(state.perks)) {
     const p = PERKS[id];

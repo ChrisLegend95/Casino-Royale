@@ -7,7 +7,7 @@ import { PERKS, PERK_ORDER, perkCost, stacksOf, isMaxed, buyPerk, computeEffects
 import {
   el, clear, fmt, fmtShort, mult, pct, toast, modal, confirmDialog, confetti,
   floatText, floatAtElement, animateNumber, flavor, clamp,
-  closeAllModals, winPopup,
+  closeAllModals, winPopup, privacyUrl,
 } from "./ui.js";
 import { GAMES, gameById } from "./games/index.js";
 import { sfx, installGlobalSounds, isEnabled, setEnabled as setSoundEnabled, toggle as toggleSound } from "./audio.js";
@@ -71,7 +71,7 @@ const app = {
   get money() { return state.money; },
   get bet() { return currentBet(); },
   /* the live house economy, so a machine can quote the same numbers the bet
-     panel does without re-deriving them (Fortune changes the limit) */
+     panel does without re-deriving them (the level drives the limit) */
   tableLimit: () => tableLimit(),
   houseMaxMult: () => CONFIG.maxWinMult,
   canAfford,
@@ -110,8 +110,8 @@ function lineBetCost(stake) {
 }
 
 /* The house table limit: the most you may stake on one round of ANY machine.
-   It grows with your level and Fortune stretches it further; a machine may still
-   override it with its own maxBet(), but nothing ships without a limit any more.
+   It grows with your level; a machine may still override it with its own
+   maxBet(), but nothing ships without a limit any more.
    The limit caps a round's LOSS as much as its win, so one bad hand can never
    take the whole bankroll. */
 function tableLimit() {
@@ -120,7 +120,6 @@ function tableLimit() {
     const v = Number(game.maxBet(state.level));
     if (Number.isFinite(v) && v > 0) lim = v;
   }
-  lim *= computeEffects().limitMult;
   if (!Number.isFinite(lim) || lim <= 0) return Infinity;
   return Math.max(1, Math.floor(lim));
 }
@@ -140,22 +139,32 @@ function moneyLabel() {
   return state.infMoney ? "\u221E" : fmt(state.money);
 }
 
-/* Perks pay a small, STAKE-BOUNDED bonus on top of whatever the game returned:
-   Fat Stacks adds winBonus of the stake on a winning round, Safety Net refunds
-   rebate of the stake on a losing one. Both are flat and tiny by construction, so
-   a jackpot cannot snowball them and no machine can be pushed past 100% by them
-   (see the balance book in main.pjs). `usePerks` is false at tables that opt out
-   -- the House's blackjack, where the edge is already razor thin. */
+/* Perks pay a small bonus on top of whatever the game returned. Fat Stacks adds
+   winBonus of the STAKE on a winning round and Safety Net refunds rebate of the
+   stake on a losing one: both are flat and tiny by construction, so a jackpot
+   cannot snowball them (see the balance book in main.pjs). Fortune is the third
+   lever and it is deliberately different -- profitBonus is a flat percentage of
+   the PROFIT, so a big multiplier does scale it. That is the intended long-run
+   power curve (a fully grown regular can be ahead of the house), and it can never
+   invent money on a round that did not win: a loss and a push are untouched.
+   `usePerks` is false at tables that opt out -- the House's blackjack, where the
+   edge is already razor thin.
+
+   The rebate is also bounded by the LOSS ITSELF: a machine that can lose only
+   part of the stake (Texas Hold'em returns your stack, so a hand can come back
+   at x0.96) must never pay back more than was actually dropped, or a
+   deliberately tiny loss would be a money printer. Every other machine loses the
+   whole stake, where min() is a no-op. */
 function applyPerks(stake, rawMult, eff, usePerks = true) {
   const base = stake * rawMult;
   const profit = base - stake;
   if (!usePerks) return { payout: roundMoney(base), profit: roundMoney(profit) };
   if (profit > 0) {
-    const bonus = stake * eff.winBonus;
+    const bonus = stake * eff.winBonus + profit * eff.profitBonus;
     return { payout: roundMoney(base + bonus), profit: roundMoney(profit + bonus) };
   }
   if (profit < 0) {
-    const refund = stake * eff.rebate;
+    const refund = Math.min(stake * eff.rebate, -profit);
     return { payout: roundMoney(base + refund), profit: roundMoney(profit + refund) };
   }
   return { payout: roundMoney(base), profit: 0 };
@@ -375,8 +384,9 @@ function buildNav() {
     arcade: "beat it \u00B7 take " + Math.round(CONFIG.arcadeWinShare * 100) + "% \u00B7 no idle",
     frogger: "timing \u00B7 10 islands \u00B7 no idle",
     memory: "fitted ladder \u00B7 table max \u00B7 no idle",
-    chest: "house edge 6.3% \u00B7 4 of 9 pay",
+    chest: "house edge 10% \u00B7 4 of 20 pay",
     revolver: "10 rungs \u00B7 house edge 8.3% \u00B7 no idle",
+    holdem: "seat charge 3% \u00B7 beat the bots",
   };
   for (const g of GAMES) {
     const btn = el("button", {
@@ -798,7 +808,7 @@ function renderPayoutNote() {
   if (eff.winBonus > 0) extras.push("+" + (eff.winBonus * 100).toFixed(1) + "% of stake on a win");
   if (eff.rebate > 0) extras.push((eff.rebate * 100).toFixed(1) + "% of stake back on a loss");
   if (eff.luck > 0) extras.push("+" + (eff.luck * 100).toFixed(1) + "% luck");
-  if (eff.limitMult > 1) extras.push("table limits \u00D7" + eff.limitMult.toFixed(2));
+  if (eff.profitBonus > 0) extras.push("+" + (eff.profitBonus * 100).toFixed(1) + "% profit on a win");
   if (game.noPerks) extras.push("perks & luck do not apply at this table");
   clear(noteEl);
   noteEl.appendChild(el("div", { html: typeof game.payoutNote === "function" ? game.payoutNote() : "" }));
@@ -1274,8 +1284,8 @@ function openPerkShop() {
     .join(", ");
   const body = el("div", {}, banner, el("p", { class: "shop-note", html:
     "Perks are permanent for the run and <b>stack</b> on every purchase. Stack caps: " + caps + ". " +
-    "The money perks pay on your <b>stake</b>, never on the payout \u2014 they widen your limits and cushion your losses without ever riding a jackpot. " +
-    "<b>Fortune</b> never caps: each stack lifts every table's maximum bet by " + (CONFIG.limitStack * 100).toFixed(1) + "%, and the price climbs each time. " +
+    "Fat Stacks and Safety Net pay on your <b>stake</b>, never on the payout, so they cushion your losses without ever riding a jackpot. " +
+    "<b>Fortune</b> never caps: each stack lifts the <b>profit on a winning round</b> by " + (CONFIG.profitStack * 100).toFixed(1) + "%, forever \u2014 same odds, bigger reward \u2014 and the price climbs with every stack. " +
     "<b>MAX ALL PERKS</b> instantly maxes every capped perk, but leaves endless Fortune alone."
   }), grid);
 
@@ -1286,7 +1296,7 @@ function openPerkShop() {
       el("div", { class: "item" }, el("b", { text: moneyLabel() }), "balance"),
       el("div", { class: "item" }, el("b", { text: "+" + (eff.winBonus * 100).toFixed(1) + "%" }), "win bonus"),
       el("div", { class: "item" }, el("b", { text: (eff.rebate * 100).toFixed(1) + "%" }), "loss rebate"),
-      el("div", { class: "item" }, el("b", { text: "\u00D7" + eff.limitMult.toFixed(2) }), "table limits"),
+      el("div", { class: "item" }, el("b", { text: "+" + (eff.profitBonus * 100).toFixed(1) + "%" }), "profit"),
       el("div", { class: "item" }, el("b", { text: "+" + (eff.luck * 100).toFixed(1) + "%" }), "luck"),
       el("div", { class: "item" }, el("b", { text: "+" + ((eff.xpMult - 1) * 100).toFixed(0) + "%" }), "xp"),
       el("div", { class: "item" }, el("b", { text: "+" + ((eff.idleSpeed - 1) * 100).toFixed(0) + "%" }), "idle speed")
@@ -1774,6 +1784,11 @@ initCloud({
 /* =========================================================
    init
    ========================================================= */
+/* The privacy policy link (footer, plus the same link inside the cloud panel).
+   Resolved at boot because the correct address differs per build -- see privacyUrl(). */
+const privacyEl = document.getElementById("privacyLink");
+if (privacyEl) privacyEl.href = privacyUrl();
+
 buildBetPanel();
 mountGame(state.machine);
 renderTop();

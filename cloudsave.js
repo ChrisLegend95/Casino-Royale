@@ -33,6 +33,17 @@
      5. Paste the client ID into CLIENT_ID below and re-upload this file.
    DEPLOY.md has the same steps with the click-by-click detail.
 
+   Staying signed in. Google's access tokens live in memory, so a page reload used
+   to look exactly like being signed out -- the player signed in, synced, and the
+   next load showed "SIGN IN" again, because the silent (`prompt: "none"`) re-auth
+   that was meant to bring the session back is blocked whenever the browser refuses
+   third-party cookies (the default in current Chrome). The token and the account
+   are therefore mirrored into localStorage under SESSION_KEY for as long as the
+   token lasts (Google issues them for an hour), and the ACCOUNT alone is kept
+   after that. A returning player is never shown as signed out: they come back
+   already syncing, or -- once the token has aged out -- sitting on a one-click
+   RECONNECT. SIGN OUT clears it, and the token is dropped the moment it expires.
+
    Debug switch: `CASINO_CLOUD_FORCE = true` (or adding `?cloud` to the URL)
    shows the cloud button even on a build where the `cloudSaves` knob is 0.
    ========================================================= */
@@ -40,7 +51,7 @@
 import {
   CONFIG, state, on, applySaveObject, saveSnapshot, snapshotSummary, isFreshSnapshot,
 } from "./state.js";
-import { el, clear, fmt, toast, modal, confirmDialog } from "./ui.js";
+import { el, clear, fmt, toast, modal, confirmDialog, privacyUrl } from "./ui.js";
 
 /* ---- paste the OAuth client ID here (see the setup steps above) ---- */
 const CLIENT_ID = "692690829308-7oc15ble9fpjispbd07ska2m6kns08gs.apps.googleusercontent.com";
@@ -203,9 +214,64 @@ function storeToken(token, expiresInSec) {
   S.token = String(token || "");
   const secs = Number(expiresInSec) > 0 ? Number(expiresInSec) : 3600;
   S.tokenExp = Date.now() + Math.max(30, secs - 120) * 1000;
+  saveSession();
   return S.token;
 }
 function clearToken() { S.token = ""; S.tokenExp = 0; }
+
+/* ---- the remembered session (see "Staying signed in" at the top) ----------
+   Written whenever we hold a token, read once at boot. The token is never kept
+   past its own expiry: an expired one is dropped on the spot, and what survives
+   is the account, which is what keeps "signed in" true as far as the player is
+   concerned. Nothing here is a secret -- the token is the same bearer string the
+   page already holds in memory, and it is gone the moment it ages out. */
+const SESSION_KEY = "casino-royale.cloud.session.v1";
+
+function saveSession() {
+  if (!S.account || !S.token) return;
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      token: S.token,
+      exp: S.tokenExp,
+      account: {
+        email: S.account.email || "",
+        name: S.account.name || "",
+        picture: S.account.picture || "",
+      },
+    }));
+  } catch (e) { /* storage blocked -- the session simply won't survive a reload */ }
+}
+
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+}
+
+/* Returns true when a still-valid token was restored. Either way S.account is
+   filled in if we remember one, so the UI can greet the player by name and the
+   panel can offer a one-click RECONNECT instead of a full "SIGN IN". */
+function loadSession() {
+  let d = null;
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return false;
+    d = JSON.parse(raw);
+  } catch (e) { return false; }
+  if (!d || typeof d !== "object" || !d.account) return false;
+  const email = String(d.account.email || "");
+  const name = String(d.account.name || "");
+  if (!email && !name) return false;
+  S.account = { email, name, picture: String(d.account.picture || "") };
+  const exp = Number(d.exp) || 0;
+  if (d.token && exp > Date.now() + 60000) {
+    /* restore verbatim rather than through storeToken, which would shave its
+       safety margin off the expiry again on every single reload */
+    S.token = String(d.token);
+    S.tokenExp = exp;
+    return true;
+  }
+  clearToken();
+  return false;
+}
 
 /* ------------------------------------------------------------------ *
    Google sign-in (GIS token model)
@@ -409,6 +475,18 @@ async function fetchUser(token) {
   }
 }
 
+/* GIS answers a dead token with an empty profile rather than an error, and that
+   must never blank out an account we already know (it would turn "signed in,
+   needs a refresh" back into a nameless sign-in screen). */
+function adoptAccount(a) {
+  const email = String((a && a.email) || "");
+  const name = String((a && a.name) || "");
+  if (!email && !name) return false;
+  S.account = { email, name, picture: String((a && a.picture) || "") };
+  saveSession();
+  return true;
+}
+
 /* ------------------------------------------------------------------ *
    the save blob
    ------------------------------------------------------------------ */
@@ -466,9 +544,23 @@ let applying = false;
 
 function fail(e, quiet) {
   const msg = friendly(e);
+  S.busy = false;
+  /* A dead session is not the player's fault and it is not a sign-out either.
+     Whenever we still know the account and there is no usable token behind it,
+     park on the reconnect state (one click, and the run keeps syncing) instead
+     of a red "CLOUD !". Everything a reconnect cannot fix -- a bad client ID, a
+     save that is too big -- keeps its own error. */
+  const code = String((e && e.code) || "");
+  const configErr = code === "invalid_client" || code === "no_client_id" || code === "too_big";
+  const noToken = !S.token || Date.now() >= S.tokenExp;
+  if (S.account && !configErr && noToken) {
+    S.status = "expired";
+    S.message = "Google sign-in needs a refresh";
+    render();
+    return false;
+  }
   S.status = "error";
   S.message = msg;
-  S.busy = false;
   render();
   if (!quiet) toast("Cloud save: " + msg, "lose", 4600);
   return false;
@@ -647,6 +739,13 @@ async function reconcile(opts = {}) {
   S.message = "";
   render();
   try {
+    /* A player-initiated sync is allowed to ask for a fresh token (the account
+       chooser pops up if Google wants one); the automatic one must stay silent
+       and just report, which is why `ensureToken(false)` is used below. */
+    if (opts.interactive === true) {
+      await ensureToken(true);
+      if (S.account) saveSession();
+    }
     const meta = await driveFind(false);
     if (!meta) {
       await pushBlob(true);
@@ -763,9 +862,9 @@ async function signIn() {
   render();
   try {
     const token = await ensureToken(true);
-    S.account = await fetchUser(token);
+    adoptAccount(await fetchUser(token));
     S.reconciled = false;
-    if (S.account.email) toast("Signed in as " + S.account.email + ".", "gold", 3000);
+    if (S.account && S.account.email) toast("Signed in as " + S.account.email + ".", "gold", 3000);
     else toast("Signed in to Google.", "gold", 2600);
     return await reconcile({});
   } catch (e) {
@@ -775,20 +874,38 @@ async function signIn() {
 
 async function silentSignIn() {
   if (!S.enabled || !clientId()) return false;
+  const remembered = !!S.account;
   try {
     const token = await ensureToken(false);
-    S.account = await fetchUser(token);
+    adoptAccount(await fetchUser(token));
     S.reconciled = false;
     render();
     return await reconcile({ auto: true, quiet: true });
   } catch (e) {
-    /* no existing grant (or no third-party cookies) -- the player just uses the
-       button. Silent failure is not an error the player needs to see. */
+    /* No token could be minted without showing the player something: either
+       there is no grant yet, or the browser blocks the hidden-iframe re-auth
+       (third-party cookies). Silent failure is not an error -- but if we
+       remember this account, it is not a sign-out either: keep the account and
+       ask for ONE click, rather than resetting the button to "SIGN IN". */
     clearToken();
+    const code = String((e && e.code) || "");
+    if (e && code === "invalid_client") {
+      S.account = null;
+      clearSession();
+      S.status = "error";
+      S.message = friendly(e);
+      render();
+      return false;
+    }
+    if (remembered) {
+      S.status = "expired";
+      S.message = "Google sign-in needs a refresh";
+      render();
+      return false;
+    }
     S.account = null;
     S.status = clientId() ? "ready" : "noclient";
-    S.message = (e && e.code === "invalid_client") ? friendly(e) : "";
-    if (e && e.code === "invalid_client") S.status = "error";
+    S.message = "";
     render();
     return false;
   }
@@ -797,6 +914,7 @@ async function silentSignIn() {
 async function signOut() {
   const token = S.token;
   clearToken();
+  clearSession();
   S.account = null;
   S.cloud = null;
   S.fileId = "";
@@ -904,6 +1022,7 @@ function statusText() {
     case "synced": return S.lastSyncAt ? "All changes saved \u00B7 last sync " + ago(S.lastSyncAt) : "All changes saved";
     case "syncing": return "Talking to Google Drive\u2026";
     case "dirty": return S.message || "Changes waiting to upload";
+    case "expired": return "Signed in as " + ((S.account && (S.account.email || S.account.name)) || "your Google account") + " \u2014 reconnect to keep syncing";
     case "error": return friendly({ code: "", message: S.message || "Cloud save problem" });
     case "noclient": return "Not set up yet";
     case "ready": return "Not signed in";
@@ -914,6 +1033,7 @@ function statusText() {
 function statusKind() {
   if (S.status === "synced") return "ok";
   if (S.status === "dirty") return "warn";
+  if (S.status === "expired") return "warn";
   if (S.status === "error") return "err";
   if (S.status === "syncing") return "busy";
   return "";
@@ -1008,7 +1128,7 @@ function signInBlock() {
         el("span", { class: "g-mark", text: "G" }),
         el("span", { text: "Sign in with Google" })
       ),
-      actionBtn("SYNC NOW", "ghost", () => reconcile({}))
+      actionBtn("SYNC NOW", "ghost", () => reconcile({ interactive: true }))
     ),
     el("div", { class: "cloud-hint", text: "If nothing opens, allow popups for this site. Google may show an \"unverified app\" warning while the app is in testing \u2014 that is expected; continue to the app." }),
     localSides()
@@ -1017,6 +1137,7 @@ function signInBlock() {
 
 function accountBlock() {
   const a = S.account || {};
+  const expired = S.status === "expired";
   const initial = (a.email || a.name || "G").trim().slice(0, 1).toUpperCase() || "G";
   const ava = a.picture
     ? el("img", { class: "cloud-ava", src: a.picture, alt: "", referrerpolicy: "no-referrer" })
@@ -1031,8 +1152,12 @@ function accountBlock() {
       pill(statusText(), statusKind())
     ),
     localSides(),
+    expired ? el("div", { class: "cloud-acts" },
+      actionBtn("RECONNECT", "gold", () => signIn())
+    ) : null,
+    expired ? el("div", { class: "cloud-hint", text: "Google sign-in expires after an hour of play. One click puts it back and this run keeps syncing \u2014 nothing on this computer is lost either way." }) : null,
     el("div", { class: "cloud-acts" },
-      actionBtn("SYNC NOW", "gold", () => reconcile({})),
+      actionBtn("SYNC NOW", expired ? "ghost" : "gold", () => reconcile({ interactive: true })),
       actionBtn("UPLOAD THIS COMPUTER", "ghost", () => pushBlob(true, true)),
       actionBtn("DOWNLOAD CLOUD SAVE", "ghost", async () => {
         const meta = await driveFind(false);
@@ -1080,6 +1205,15 @@ function panelBody() {
   else wrap.appendChild(accountBlock());
   wrap.appendChild(backupBlock());
   wrap.appendChild(el("p", { class: "cloud-fine", text: "Saving is always local first. Signing in only mirrors the save into your own Google Drive \u2014 there is no game server, and nothing is sent to the person who made this game." }));
+  /* The policy page spells out exactly what this panel does with a sign-in -- it is
+     also the "Application privacy policy link" on the Google OAuth consent screen. */
+  wrap.appendChild(el("div", { class: "cloud-privacy" },
+    el("a", {
+      class: "btn ghost cloud-act cloud-plink", href: privacyUrl(),
+      target: "_blank", rel: "noopener noreferrer",
+      text: "PRIVACY POLICY \u2197",
+    })
+  ));
   return wrap;
 }
 
@@ -1109,9 +1243,10 @@ function renderBtn() {
   const label = S.status === "synced" ? "SYNCED"
     : S.status === "dirty" ? "SYNC"
       : S.status === "syncing" ? "SYNCING"
-        : S.status === "error" ? "CLOUD !"
-          : S.status === "noclient" ? "CLOUD"
-            : S.account ? "CLOUD" : "SIGN IN";
+        : S.status === "expired" ? "RECONNECT"
+          : S.status === "error" ? "CLOUD !"
+            : S.status === "noclient" ? "CLOUD"
+              : S.account ? "CLOUD" : "SIGN IN";
   if (txt) txt.textContent = label;
   const title = statusText();
   btn.title = title;
@@ -1141,7 +1276,15 @@ export function initCloud(opts = {}) {
   S.enabled = opts.enabled !== false || forced;
   S.onApplied = typeof opts.onApplied === "function" ? opts.onApplied : null;
   S.canApply = typeof opts.canApply === "function" ? opts.canApply : null;
-  S.status = S.enabled ? (clientId() ? "ready" : "noclient") : "off";
+  /* Bring back yesterday's session (see "Staying signed in" at the top). A valid
+     token means the player is signed in and syncing again with no prompt at all;
+     an aged-out one still fills in S.account, so they are greeted by name and
+     offered RECONNECT instead of being dumped back to "SIGN IN". */
+  const resumed = S.enabled ? loadSession() : false;
+  S.status = S.enabled
+    ? (clientId() ? (S.account ? (resumed ? "syncing" : "expired") : "ready") : "noclient")
+    : "off";
+  if (S.status === "expired") S.message = "Google sign-in needs a refresh";
 
   const btn = document.getElementById("cloudBtn");
   if (btn) {
@@ -1169,7 +1312,7 @@ export const cloud = {
   signIn,
   signOut,
   deleteCloudSave,
-  syncNow: () => reconcile({}),
+  syncNow: () => reconcile({ interactive: true }),
   upload: () => pushBlob(true, true),
   downloadSave,
   importSaveText,
@@ -1183,6 +1326,7 @@ export const cloud = {
     setTokenProvider(fn) { tokenProvider = typeof fn === "function" ? fn : null; },
     setToken(token, ttlMs) { storeToken(token, (Number(ttlMs) || 3600000) / 1000); },
     forgetToken: clearToken,
+    session: { save: saveSession, load: loadSession, clear: clearSession, read: () => { try { return localStorage.getItem(SESSION_KEY); } catch (e) { return null; } } },
     buildBlob,
     parseCloud,
     reconcile,

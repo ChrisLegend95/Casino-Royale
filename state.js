@@ -87,18 +87,15 @@ export const CONFIG = {
   arcadePotCap: cfg("arcadePotCap", 14),
   // colour-memory ("Neon Recall") tunables -- see main.pjs for what they do
   memStartLen: cfg("memStartLen", 3),
-  memRandStartLen: cfg("memRandStartLen", 5),
   memLevels: cfg("memLevels", 19),
   memMaxLen: cfg("memMaxLen", 20),
   // the fitted ladder: a rung pays memLadderRtp / the reference player's chance of
   // clearing that many colours (perfect to memSkillKnee, then memSkillDecay per
-  // colour -- memSkillDecayRand in RANDOM). Caps are the machine's own ceiling.
-  memSkillKnee: cfg("memSkillKnee", 8),
+  // colour). memLadderCap is the machine's own ceiling.
+  memSkillKnee: cfg("memSkillKnee", 5),
   memLadderRtp: cfg("memLadderRtp", 0.95),
   memSkillDecay: cfg("memSkillDecay", 0.88),
-  memSkillDecayRand: cfg("memSkillDecayRand", 0.85),
   memLadderCap: cfg("memLadderCap", 8),
-  memLadderCapRand: cfg("memLadderCapRand", 12),
   // the machine's table maximum (it overrides the house level limit): see main.js
   memTableBase: cfg("memTableBase", 100),
   memTableMax: cfg("memTableMax", 2000),
@@ -116,16 +113,17 @@ export const CONFIG = {
   levelReward: cfg("levelReward", 10),
   // ---- balance book (see main.pjs) ----
   // Luck is a per-round odds nudge, hard-capped at luckCap and tuned per machine
-  // so no game is ever pushed past 100% by it. Perk payouts are stake-bounded: Fat
-  // Stacks pays up to +25% of the stake on a win (50 stacks) and Safety Net up to
-  // +10% back on a loss (20 stacks); Fortune lifts the table limits (+0.1% a stack,
-  // endless) instead of the payouts.
+  // so no game is ever pushed past 100% by it. Fat Stacks and Safety Net pay on
+  // the STAKE: Fat Stacks up to +25% of the stake on a win (50 stacks), Safety Net
+  // up to +10% back on a loss (20 stacks). Fortune is the endless one and pays on
+  // the PROFIT instead (+0.1% of a win per stack), so it does scale with a big
+  // multiplier -- see the balance book in main.pjs.
   levelLuck: cfg("levelLuck", 0.0006),
   luckCoin: cfg("luckCoin", 0.005),
   luckCap: cfg("luckCap", 0.08),
   winBonusStack: cfg("winBonusStack", 0.005),
   rebateStack: cfg("rebateStack", 0.005),
-  limitStack: cfg("limitStack", 0.001),
+  profitStack: cfg("profitStack", 0.001),
   tableLimitBase: cfg("tableLimitBase", 400),
   tableLimitExp: cfg("tableLimitExp", 1.35),
   maxWinMult: cfg("maxWinMult", 1000),
@@ -135,19 +133,43 @@ export const CONFIG = {
   // turn it on there too. With no client ID configured the button explains the
   // 5-minute setup instead of signing anyone in.
   cloudSaves: cfg("cloudSaves", 1),
-  // treasure chest payouts (four of the nine chests pay, one more is a Lucky
-  // Star that grants a second pick). The star's re-pick is worth the average
-  // chest, so the table returns (high + gem + mid + low) / 8.
-  // Defaults (4 + 2 + 1 + 0.5) return 93.75%, a real house edge. The four
-  // prizes MUST sum to less than 8 or this machine is a money printer.
+  // treasure chest payouts (four of the nine chests pay -- one chest each --
+  // one chest is a Lucky Star that grants a free re-pick, and the other four
+  // are traps; see the comment in src/games/chest.js).
+  // The star's re-pick averages a random chest, so the table returns
+  // (high + gem + mid + low) / 8. Defaults (4 + 2 + 1 + 0.5) return 93.75%,
+  // a real house edge. The four prizes MUST sum to less than eight or this
+  // machine is a money printer.
   chestHigh: cfg("chestHigh", 4),
   chestGem: cfg("chestGem", 2),
   chestMid: cfg("chestMid", 1),
   chestLow: cfg("chestLow", 0.5),
+  // texas hold'em -- see main.pjs for what each of these does. The House sells
+  // you a seat (a flat seat charge on the buy-in) instead of taking a rake, which
+  // makes the table exactly symmetric: a seat that pays the charge and plays like
+  // the other seats returns 1 - holdemFee. See the machine note in DEV-NOTES.md.
+  holdemFee: cfg("holdemFee", 0.03),
+  // big blinds per stack. Scales with the stake, so the game is the same shape at
+  // every bet; a short stack wins more hands but has less room to play.
+  holdemDepth: cfg("holdemDepth", 25),
+  // how many bots sit down against you (the machine has its own 1/2/3 picker too)
+  holdemBots: cfg("holdemBots", 3),
+  // Luck buys a discount on YOUR OWN seat charge -- never a rigged deal, which is
+  // the one thing a poker table must not do. 0.5 = up to half off at the luck cap.
+  // It is deliberately not larger: the cage's whole-dollar payout rounding is worth
+  // up to +0.9% of the stake at a tiny buy-in, and the luck discount has to leave
+  // the luck-capped return comfortably under 100%. See DEV-NOTES.md.
+  holdemLuckFee: cfg("holdemLuckFee", 0.5),
+  // the table minimum. The felt runs on cents (blinds, fractional pots) but the cage
+  // pays whole dollars, and that rounding is worth up to ~0.9% of the stake at a $25
+  // buy-in -- more than the whole seat charge at the luck cap. From $50 up it is
+  // inside +/-0.2%, so the table opens there and the rounding can never out-earn the
+  // charge. (The machine pays the EXACT stack ratio to main.js, so the whole-dollar
+  // rounding is the only rounding in the payout.)
+  holdemMinBet: cfg("holdemMinBet", 50),
   // russian roulette -- see main.pjs for what each of these does
   rrChambers: cfg("rrChambers", 6),
-  rrRake: cfg("rrRake", 0),
-  // the whole ladder: [[bank multiplier, live rounds], ...] per round, read from
+  rrRake: cfg("rrRake", 0),  // the whole ladder: [[bank multiplier, live rounds], ...] per round, read from
   // the pjs function in main.pjs (revolver.js falls back to the same rows if null)
   rrLadder: cfgLadder("rrLadder"),
 };
@@ -169,6 +191,7 @@ function newRun() {
     frogger: { bestDepth: 0, bestMult: 1 },
     memory: { bestLen: 0, bestMult: 1 },
     revolver: { bestMult: 1, runs: 0, busts: 0 },
+    holdem: { bots: CONFIG.holdemBots, bestMult: 1, bestPot: 0 },
     stats: {
       plays: 0,
       wagered: 0,
@@ -247,6 +270,9 @@ function hydrateState(data) {
   state.frogger = Object.assign({ bestDepth: 0, bestMult: 1 }, data.frogger || {});
   state.memory = Object.assign({ bestLen: 0, bestMult: 1 }, data.memory || {});
   state.revolver = Object.assign({ bestMult: 1, runs: 0, busts: 0 }, data.revolver || {});
+  state.holdem = Object.assign({ bots: CONFIG.holdemBots, bestMult: 1, bestPot: 0 }, data.holdem || {});
+  if (!Number.isFinite(state.holdem.bots) || state.holdem.bots < 1) state.holdem.bots = 1;
+  if (state.holdem.bots > 3) state.holdem.bots = 3;
   if (!state.stats.byGame || typeof state.stats.byGame !== "object") state.stats.byGame = {};
   /* the marker must come from the save itself -- newRun()'s default would otherwise
      make every old save look already-migrated */

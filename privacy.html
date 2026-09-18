@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Casino Royale</title>
+<meta name="description" content="Privacy policy for Casino Royale: a free, fictional-money casino game that runs in your browser. Nothing is collected, there is no game server, and the only optional exception is a save backup that goes straight to your own Google Drive.">
+<meta name="robots" content="index, follow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07090f;
+  --panel:#131a29;
+  --panel2:#0e1524;
+  --line:#26314a;
+  --line2:#33405e;
+  --text:#e9eefb;
+  --muted:#8b98b4;
+  --gold:#f2c14e;
+  --gold2:#d9a02a;
+  --green:#37d67a;
+  --radius:14px;
+  --shadow:0 10px 30px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(1100px 640px at 50% -12%, #182447 0%, rgba(24,36,71,0) 62%),
+    radial-gradient(900px 620px at 105% 110%, #241338 0%, rgba(36,19,56,0) 58%),
+    radial-gradient(700px 500px at -10% 100%, #0d2a2a 0%, rgba(13,42,42,0) 60%),
+    var(--bg);
+  background-attachment:fixed;
+  color:var(--text);
+  font-family:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  text-align:left;
+  font-size:15px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:rgba(242,193,78,.35)}
+a{color:#ffd98a;text-decoration:none;border-bottom:1px solid rgba(242,193,78,.3)}
+a:hover{color:#fff3cf;border-bottom-color:#f2c14e}
+code{
+  background:#0b1120;border:1px solid var(--line2);border-radius:6px;
+  padding:1px 6px;font-size:12.5px;color:#ffe08a;font-family:ui-monospace,Menlo,Consolas,monospace;
+  word-break:break-all;
+}
+
+/* ---- top strip ---- */
+.topbar{
+  position:sticky;top:0;z-index:5;
+  display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  padding:11px 18px;
+  background:linear-gradient(180deg,rgba(24,32,52,.97),rgba(14,19,31,.97));
+  border-bottom:1px solid var(--line);
+  box-shadow:0 6px 22px rgba(0,0,0,.5);
+}
+.topbar::after{
+  content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(242,193,78,.65),transparent);
+}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-suit{font-size:24px;line-height:1;color:var(--gold);text-shadow:0 0 18px rgba(242,193,78,.6)}
+.brand-name{
+  font-family:'Bebas Neue',Impact,sans-serif;font-size:20px;letter-spacing:2.5px;
+  background:linear-gradient(180deg,#ffe9a8,#e0a92c);
+  -webkit-background-clip:text;background-clip:text;color:transparent;white-space:nowrap;
+}
+.backbtn{
+  font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;
+  padding:8px 13px;border:1px solid var(--line2);border-radius:10px;
+  background:linear-gradient(180deg,#26324c,#1a2233);color:var(--text);
+  border-bottom:1px solid var(--line2);
+}
+.backbtn:hover{color:#fff;border-color:var(--gold)}
+
+/* ---- page ---- */
+.wrap{max-width:860px;margin:0 auto;padding:34px 20px 70px}
+.hero{text-align:center;padding:14px 0 26px}
+.hero .suit{font-size:38px;line-height:1;color:var(--gold);text-shadow:0 0 24px rgba(242,193,78,.55)}
+.hero h1{
+  margin:6px 0 8px;font-family:'Bebas Neue',Impact,sans-serif;font-size:clamp(38px,8vw,62px);
+  letter-spacing:5px;line-height:1;
+  background:linear-gradient(180deg,#ffe9a8,#dca733);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.hero p{margin:0 auto;max-width:620px;color:#b7c4dc;font-size:14.5px}
+.stamp{
+  display:inline-block;margin-top:14px;padding:4px 12px;border-radius:999px;
+  font-size:10.5px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;
+  color:#e6cf90;background:rgba(242,193,78,.10);border:1px solid rgba(242,193,78,.36);
+}
+
+.card{
+  background:linear-gradient(180deg,rgba(20,28,45,.92),rgba(13,19,32,.92));
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:18px 20px;box-shadow:var(--shadow);
+}
+.tldr{border-color:rgba(242,193,78,.32);box-shadow:0 10px 30px rgba(0,0,0,.45), inset 0 0 0 1px rgba(242,193,78,.08)}
+.tldr h2{
+  margin:0 0 10px;font-family:'Bebas Neue',Impact,sans-serif;font-size:20px;letter-spacing:2.6px;
+  color:var(--gold);text-shadow:0 0 16px rgba(242,193,78,.25);
+}
+.tldr ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+.tldr li{position:relative;padding-left:24px;font-size:14px;color:#dbe4f7}
+.tldr li::before{
+  content:"";position:absolute;left:4px;top:9px;width:7px;height:7px;border-radius:2px;transform:rotate(45deg);
+  background:linear-gradient(180deg,#ffe08a,#d9a02a);box-shadow:0 0 10px rgba(242,193,78,.6);
+}
+.tldr li b{color:#fff}
+
+section.sec{margin-top:30px}
+section.sec>h2{
+  display:flex;align-items:center;gap:11px;margin:0 0 12px;
+  font-family:'Bebas Neue',Impact,sans-serif;font-size:24px;letter-spacing:2.2px;color:#ffe9a8;
+  font-weight:400;
+}
+section.sec>h2 .n{
+  flex:0 0 auto;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+  font-family:'Inter',sans-serif;font-size:13px;font-weight:900;letter-spacing:0;color:#2c1d00;
+  background:linear-gradient(180deg,#ffe08a,#d9a02a);box-shadow:0 4px 14px rgba(242,193,78,.3);
+}
+section.sec>h2::after{content:"";flex:1 1 auto;height:1px;background:linear-gradient(90deg,rgba(242,193,78,.5),transparent)}
+section.sec p{margin:0 0 12px;color:#cfd9ee}
+section.sec p:last-child{margin-bottom:0}
+ul.plain{margin:0 0 12px;padding-left:20px;display:flex;flex-direction:column;gap:7px;color:#cfd9ee}
+ul.plain li::marker{color:var(--gold2)}
+ul.plain b{color:#fff}
+.note{
+  margin:14px 0 0;padding:11px 13px;border-radius:10px;
+  background:rgba(255,255,255,.03);border:1px solid var(--line);border-left:3px solid var(--gold2);
+  font-size:13px;color:#b9c5dc;
+}
+.note b{color:#ffe9a8}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:4px 0 8px}
+.mini{
+  background:rgba(255,255,255,.022);border:1px solid var(--line);border-radius:11px;padding:12px 13px;
+}
+.mini h3{margin:0 0 6px;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}
+.mini p{margin:0;font-size:13px;color:#c3cfe6}
+.mini .yes{color:var(--green);font-weight:700}
+.mini .no{color:#ff9aa4;font-weight:700}
+table.keys{
+  width:100%;border-collapse:collapse;margin:4px 0 8px;
+  background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:11px;overflow:hidden;
+}
+table.keys th,table.keys td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);font-size:13px}
+table.keys th{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);background:rgba(255,255,255,.03)}
+table.keys tr:last-child td{border-bottom:none}
+table.keys td:first-child{white-space:nowrap}
+.foot{
+  max-width:860px;margin:0 auto;padding:0 20px 60px;
+  font-size:12px;color:var(--muted);text-align:center;line-height:1.8;
+}
+.foot .links{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-bottom:12px}
+.foot .links a{font-size:12.5px}
+
+@media (max-width:640px){
+  body{font-size:14.5px}
+  .wrap{padding:22px 15px 60px}
+  .card{padding:15px 15px}
+  .grid{grid-template-columns:1fr}
+  section.sec>h2{font-size:21px}
+  table.keys th,table.keys td{padding:8px 9px;font-size:12.5px}
+  .backbtn{font-size:10px;padding:7px 10px}
+}
+@media print{
+  body{background:#fff;color:#111}
+  .topbar,.backbtn{display:none}
+  .card,.mini,.note,table.keys{background:#fff;box-shadow:none;border-color:#ccc}
+  a{color:#444}
+  section.sec>h2,.tldr h2,.hero h1{color:#111;-webkit-text-fill-color:#111}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <span class="brand-suit" aria-hidden="true">&#9824;</span>
+    <span class="brand-name">CASINO ROYALE</span>
+  </div>
+  <a class="backbtn" href="index.html">&#8592; Back to the game</a>
+</div>
+
+<main class="wrap">
+
+  <div class="hero">
+    <div class="suit" aria-hidden="true">&#9824;</div>
+    <h1>Privacy Policy</h1>
+    <p>Casino Royale is a free, fictional-money casino game that runs entirely in your browser. This page explains, in plain language, what it does and does not do with information about you.</p>
+    <div class="stamp">Last updated &middot; 17 September 2026</div>
+  </div>
+
+  <div class="card tldr">
+    <h2>The short version</h2>
+    <ul>
+      <li><b>You never need an account.</b> There is nothing to sign up for, nothing to buy, and no real money anywhere in the game.</li>
+      <li><b>Your run is stored on your own device</b> (your browser's local storage) so the game can pick up where you left off. It is not uploaded anywhere unless you deliberately switch on the optional Google backup described below.</li>
+      <li><b>There is no game server, no analytics, no advertising and no tracking.</b> The person who made this game cannot see you, your run, or anything about you.</li>
+      <li><b>One optional exception:</b> if you press "Sign in with Google", your save is copied to a hidden folder in <i>your own</i> Google Drive. It goes straight from your browser to Google &mdash; never to us &mdash; and you can delete it or revoke access at any moment.</li>
+    </ul>
+  </div>
+
+  <section class="sec">
+    <h2><span class="n">1</span>Who runs this game</h2>
+    <p>Casino Royale is a free, open-source hobby project (also titled <i>Gamble Casino</i>). There is no company behind it, no employees, no advertising and no business model. That is not a marketing claim but a description of the architecture: there is simply nowhere for your data to be sent, because there is no server belonging to this project at all.</p>
+    <p>Source code, bug reports and contact: <a href="https://github.com/chrislegend95/Casino-Royale" target="_blank" rel="noopener noreferrer">github.com/chrislegend95/Casino-Royale</a>.</p>
+  </section>
+
+  <section class="sec">
+    <h2><span class="n">2</span>What is stored on your device</h2>
+    <p>The game is <b>local-first</b>: everything it knows about your run lives in your browser's <code>localStorage</code> on the device you are playing on, and never leaves it unless you choose the optional cloud backup. That data is:</p>
+    <table class="keys">
+      <tr><th>Stored value</th><th>What it holds</th></tr>
+      <tr><td><code>casino-royale.save.v1</code></td><td>Your run: balance, level and XP, purchased perks, per-machine statistics, play history, the machine and bet you were last on, and loan / auto-play settings.</td></tr>
+      <tr><td><code>casino-royale.sound.v1</code><br><code>casino-royale.music.v1</code></td><td>Whether you have muted sound or music.</td></tr>
+      <tr><td><code>casino-royale.device.v1</code></td><td>Only created if you use the cloud backup: a random ID generated on your device, plus a friendly name for it (for example "Chrome on Windows"), used solely to label which device last wrote your backup file.</td></tr>
+      <tr><td><code>casino-royale.cloud.session.v1</code></td><td>Only if you sign in with Google: your Google account name, email address and avatar URL, and a short-lived access token. See section 4.1 for exactly why, and how to remove it.</td></tr>
+      <tr><td><code>casino-royale.cloud.deferred.v1</code></td><td>Only if you sign in: a tiny flag so the game remembers that a backup still needs to be pushed.</td></tr>
+    </table>
+    <p>All of it is fictional game data. None of it identifies you by itself. You can erase every one of these values at any time by clearing site data for this page in your browser's settings &mdash; the game will simply start a fresh run.</p>
+  </section>
+
+  <section class="sec">
+    <h2><span class="n">3</span>What the game does not do</h2>
+    <div class="grid">
+      <div class="mini">
+        <h3>Not collected</h3>
+        <p><span class="no">&#10007;</span> no name, email or account (unless you opt into Google backup)<br>
+        <span class="no">&#10007;</span> no analytics, telemetry or crash reports<br>
+        <span class="no">&#10007;</span> no advertising, tracking pixels or profiling<br>
+        <span class="no">&#10007;</span> no payment or financial information &mdash; there is nothing to buy<br>
+        <span class="no">&#10007;</span> no cookies set by the game itself<br>
+        <span class="no">&#10007;</span> no location, contacts, microphone, camera or files</p>
+      </div>
+      <div class="mini">
+        <h3>Not done with your data</h3>
+        <p><span class="no">&#10007;</span> never sold, rented or shared<br>
+        <span class="no">&#10007;</span> never used for advertising of any kind<br>
+        <span class="no">&#10007;</span> never sent to the author of the game<br>
+        <span class="no">&#10007;</span> never used to build a profile about you<br>
+        <span class="yes">&#10003;</span> the author has no way to read your run even if they wanted to</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2><span class="n">4</span>The one optional exception: cloud save</h2>
+    <p>At the top of the game there is a <b>"Sign in with Google"</b> button. It exists only so that a run can survive a wiped browser or move to another computer. It is completely optional &mdash; if you never touch it, nothing about the game changes and no information ever leaves your device.</p>
+
+    <h2 style="font-size:17px;letter-spacing:1.6px;margin-top:18px"><span class="n" style="width:24px;height:24px;font-size:11px">4.1</span>If you do use it</h2>
+    <ul class="plain">
+      <li><b>What it asks Google for.</b> Two permissions: <code>drive.appdata</code> (create, read, update and delete files that <i>this app</i> created in a hidden app folder of your Drive) and <code>userinfo.email</code> (your email address, so the panel can show which account is signed in). Nothing more &mdash; no access to the rest of your Drive, your Gmail, your contacts, or any other Google service.</li>
+      <li><b>Where it goes.</b> The page talks <b>directly to Google</b> &mdash; <code>accounts.google.com</code> to sign in and <code>www.googleapis.com</code> for Drive. There is no intermediary server, and no save data is ever sent to the author of this game.</li>
+      <li><b>What is stored.</b> One small JSON file (<code>casino-royale-save.json</code>) containing your run &mdash; the same fictional game data listed in section 2 &mdash; is written to the hidden <i>app data</i> folder of <b>your own</b> Google Drive. That folder does not appear in your normal Drive file list.</li>
+      <li><b>Who can read it.</b> You, and anyone who already has full access to your Google account. Not the author of the game, not other players, not any third party.</li>
+      <li><b>How long it lasts.</b> Until you delete it. It is not on a timer and it does not expire.</li>
+      <li><b>How to undo it.</b> In the same panel, <b>DELETE CLOUD SAVE</b> removes the file from your Drive, and <b>SIGN OUT</b> ends the session and erases the locally stored Google account details and token from your browser. Independently of the game, you can revoke this app's access at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">myaccount.google.com/permissions</a>, which invalidates the access token immediately.</li>
+    </ul>
+    <div class="note"><b>Signed in or not, the local save keeps working.</b> The cloud copy is a mirror, never a dependency &mdash; losing the connection, signing out, or deleting the cloud file cannot lose the run you have on this computer.</div>
+  </section>
+
+  <section class="sec">
+    <h2><span class="n">5</span>Manual save files (no account at all)</h2>
+    <p>The same panel offers <b>DOWNLOAD SAVE FILE</b> and <b>LOAD SAVE FILE</b>, which write and read a small <code>.json</code> backup on your own device. This works signed out and involves no network at all; a file you download is entirely yours to keep or delete.</p>
+  </section>
+
+  <section class="sec">
+    <h2><span class="n">6</span>Hosting and third parties</h2>
+    <ul class="plain">
+      <li><b>Hosting.</b> The pages are static files served by <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener noreferrer">GitHub Pages</a>. Like any web host, GitHub may record standard technical request data such as your IP address and browser user agent in its server logs. That is GitHub's processing, under GitHub's privacy statement, and is not visible to the game or its author.</li>
+      <li><b>Fonts.</b> The page loads two typefaces from <a href="https://fonts.google.com" target="_blank" rel="noopener noreferrer">Google Fonts</a>, which means your browser makes a request to Google's font servers. Google Fonts does not set cookies for this. If you block it (an ad-blocker will do), the game simply falls back to system fonts and works exactly the same.</li>
+      <li><b>Google sign-in (optional, section 4).</b> Uses Google Identity Services and the Google Drive API. What Google does with your account data is governed by <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google's Privacy Policy</a>.</li>
+      <li><b>Perchance.</b> The game is also published as a generator on perchance.org. There, the page is embedded in an iframe served by Perchance, and Perchance &mdash; a separate service with its own privacy policy &mdash; may collect basic technical information such as your IP address. The cloud save feature is switched off in the Perchance copy, so the game itself sends nothing anywhere.</li>
+    </ul>
+  </section>
+
+  <section class="sec">
+    <h2><span class="n">7</span>Children</h2>
+    <p>Casino Royale is a fictional gambling-themed toy and is not directed at children. It does not knowingly collect personal information from anyone, including children &mdash; there is nothing collected from a player who does not deliberately sign in, and Google accounts carry their own age requirements. No real money, real gambling, real betting or prizes are involved at any point.</p>
+  </section>
+
+  <section class="sec">
+    <h2><span class="n">8</span>Changes to this policy</h2>
+    <p>If the game ever changes in a way that affects this policy &mdash; for example, a new feature that would send data somewhere &mdash; this page will be updated and the date at the top of the page changed. Because the project is open source, the complete history of this page is also visible in the project's git repository.</p>
+  </section>
+
+  <section class="sec">
+    <h2><span class="n">9</span>Contact and your data</h2>
+    <p>Questions, corrections or concerns: open an issue at <a href="https://github.com/chrislegend95/Casino-Royale/issues" target="_blank" rel="noopener noreferrer">github.com/chrislegend95/Casino-Royale/issues</a>.</p>
+    <p>There is no personal-data request to make in the usual sense, because the author of the game holds no personal data about any player &mdash; not a name, not an email, not a save. Everything described in section 2 lives on your device and is deleted by clearing your browser's site data; anything described in section 4 lives in your own Google Drive and is deleted there.</p>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="links">
+    <a href="index.html">Play the game</a>
+    <a href="https://github.com/chrislegend95/Casino-Royale" target="_blank" rel="noopener noreferrer">Source code</a>
+    <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google's privacy policy</a>
+    <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">Revoke app access</a>
+  </div>
+  Casino Royale is a free-to-play game with fictional currency. No real-money gambling, no deposits, no withdrawals and no prizes. All balances, bets and multipliers are imaginary and have no monetary value.
+</footer>
+
+</body>
+</html>

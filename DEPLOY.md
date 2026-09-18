@@ -10,10 +10,20 @@ from the repo, so relative ES-module imports (`./state.js`, `../audio.js`, ...) 
   other relatively, which 404s outside Perchance — the page then renders only the static top bar.
 - Upload the rest of `src/` to the repo with the `src/` prefix stripped and the `games/`
   subfolder preserved (`src/games/crash.js` -> `games/crash.js`).
+- **`src/privacy.html` -> `privacy.html` at the repo root.** It is linked from the game's footer
+  and from the cloud panel, and it is the "Application privacy policy link" on the Google OAuth
+  consent screen, so it has to be reachable at
+  `https://chrislegend95.github.io/Casino-Royale/privacy.html`. It is self-contained (own styles),
+  so no other file has to travel with it.
 - **Binary assets too:** `src/audio/revolver-spin.mp3` must land at `audio/revolver-spin.mp3`.
   `audio.js` resolves it relative to itself (`new URL("audio/revolver-spin.mp3", import.meta.url)`),
   so a missing file just costs the recorded Russian Roulette spin — that machine falls back to its
   synthesized whirl (see DEV-NOTES.md), and nothing else breaks.
+- **The symbol artwork too:** all 70 PNGs in `src/sprites/` must land at `sprites/<name>.png`, and
+  `src/sprites.js` at `sprites.js`. `sprites.js` resolves them relative to itself
+  (`new URL("sprites/", import.meta.url)`), so the stripped prefix still finds them; a missing PNG
+  costs only that symbol, which falls back to the emoji the machine used to draw (see the "Symbol
+  artwork" section of DEV-NOTES.md). Re-upload this folder whenever it or `sprites.js` changes.
 - GitHub Pages caches JS/CSS for ~10 minutes (`Cache-Control: max-age=600`); hard-reload or tick
   "Disable cache" in DevTools after uploading.
 
@@ -43,8 +53,15 @@ appears but the panel shows these same steps — nothing can sign in.
 1. <https://console.cloud.google.com> → create a project (any name).
 2. **APIs & Services → Library → Google Drive API → Enable**.
 3. **APIs & Services → OAuth consent screen** → External → fill in the app name and your email.
+   - **Application home page:** `https://chrislegend95.github.io/Casino-Royale/`
+   - **Application privacy policy link:** `https://chrislegend95.github.io/Casino-Royale/privacy.html`
+     — that page is `src/privacy.html` (see the upload list above), and the game links to it from its
+     footer and from the cloud panel. Google only needs the one public URL; nothing else has to
+     change if the game moves.
    - Scopes: the app only asks for `drive.appdata` and `userinfo.email`, both non-sensitive, so no
-     Google verification review is needed.
+     Google verification review is needed while the app is in **Testing** (this is Google's own
+     "Non-sensitive scopes" list for the Drive API). Publishing it to the world is a different
+     matter — that needs verification, and a demo video.
    - While the app is in **Testing**, add every account that should be able to sign in under
      **Test users** (up to 100). Anyone not on that list gets `access_denied`.
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID → Web application**.
@@ -55,6 +72,8 @@ appears but the panel shows these same steps — nothing can sign in.
    No redirect URI is needed; the popup uses the token flow.
 6. Copy the generated client ID into `CLIENT_ID` at the top of `src/cloudsave.js` and upload that
    file (see the deploy notes above). A client ID is public by design — it is fine in the repo.
+   **This is already done for this project** (the ID is baked in); `window.CASINO_GOOGLE_CLIENT_ID`
+   overrides it at runtime if a second origin needs its own.
 
 ## Knobs and switches
 
@@ -71,6 +90,12 @@ appears but the panel shows these same steps — nothing can sign in.
 
 ## When sign-in does not work
 
+- **The button says `RECONNECT`** — expected, and not a sign-out. Google access tokens last an hour;
+  once one ages out the player is still *known* (their account is remembered locally), they just need
+  one click to mint a fresh token and carry on syncing. Nothing on the computer is at risk, and the
+  game plays normally while it waits. (A page reload used to drop them back to "SIGN IN" instead,
+  because the silent re-auth is refused whenever third-party cookies are blocked — see the session
+  notes in `cloudsave.js`.)
 - **Popup never appears** — popups are blocked for the site; allow them.
 - **`origin_mismatch` / `idpiframe_initialization_failed`** — the exact origin (scheme + host, no
   trailing slash) is missing from the client's authorized JS origins, or the browser blocks

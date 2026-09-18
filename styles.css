@@ -199,6 +199,29 @@ body{
   gap:14px;padding:14px;min-height:0;
 }
 
+/* ============ FOOTER (privacy policy link) ============ */
+/* The policy page (privacy.html) is also the "Application privacy policy link" on
+   the Google OAuth consent screen, so it stays visible on every screen of the game. */
+#siteFoot{
+  flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
+  gap:10px 16px;flex-wrap:wrap;padding:6px 18px;
+  border-top:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(12,17,28,.8),rgba(8,11,19,.92));
+}
+.foot-fine{
+  font-size:9.5px;letter-spacing:1.4px;text-transform:uppercase;color:#63708d;
+}
+.foot-links{display:flex;align-items:center;gap:12px}
+.foot-link{
+  display:inline-block;padding:3px 11px;border-radius:999px;
+  border:1px solid var(--line2);background:rgba(255,255,255,.03);
+  color:#cfdaef;font-weight:700;font-size:10.5px;letter-spacing:1.3px;text-transform:uppercase;
+}
+.foot-link:hover{
+  border-color:var(--gold);color:#ffe9a8;
+  background:linear-gradient(180deg,rgba(242,193,78,.14),rgba(242,193,78,.05));
+}
+
 /* machine nav */
 #machineNav{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto}
 .machine-btn{
@@ -453,6 +476,48 @@ body{
   height:140px;display:grid;place-items:center;font-size:66px;line-height:1;
   filter:drop-shadow(0 4px 10px rgba(0,0,0,.6));
 }
+
+/* ---------- symbol artwork (src/sprites/*.png) ----------
+   Every machine that shows a symbol to the player draws it with a
+   <img> built by src/sprites.js instead of an emoji glyph. Each file is a
+   148x148 canvas with the art tight-cropped and centred inside it, so the
+   files are NOT interchangeable as images: sprites.js writes --sp-k
+   (148 / the art's longest side) on the image, and the element around it
+   names --sp-base — how big the ARTWORK itself should be. The box below is
+   exactly --sp-base square and the image is scaled by --sp-k inside it, so
+   the art always lands centred, inside a --sp-base square, at the same
+   visual size whatever its own file's padding happens to be. Keeping the
+   BOX at --sp-base (a transform, not a size) matters: an <img> larger than
+   its cell is pushed to one edge by grid/flex centring instead of being
+   centred, which is what used to shove the wide sprites off-centre.
+   So: to resize symbols, set --sp-base on the container, never font-size. */
+.spr{
+  display:block;object-fit:contain;pointer-events:none;user-select:none;-webkit-user-drag:none;
+  width:var(--sp-base,64px);
+  height:var(--sp-base,64px);
+  transform:scale(var(--sp-k,1));
+}
+.spr-fallback{line-height:1}
+.spr-row{display:inline-flex;align-items:center;gap:2px;vertical-align:middle}
+.spr-inline{display:inline-block;vertical-align:-0.18em;margin:0 .04em}
+/* the flat chips have no drop-shadow of their own, so give the art one;
+   the reel cells and chest buttons already filter their whole subtree */
+.paychip .spr,.mlchip .spr,.ic-cell .spr,.ic-excell .spr{filter:drop-shadow(0 2px 4px rgba(0,0,0,.55))}
+
+/* how big the artwork is where a symbol appears */
+.reel-cell{--sp-base:78px}
+.slot-result{--sp-base:22px}
+.paychip{--sp-base:44px}
+.mlcell{--sp-base:calc(var(--mlch) * 0.82)}
+.mlchip{--sp-base:40px}
+.chest-icon{--sp-base:clamp(30px,8vw,44px)}
+.ic-cell{--sp-base:30px}
+.ic-excell{--sp-base:26px}
+.toast{--sp-base:20px}
+/* the line-by-line win readout under the Fortune Lines drums */
+.ml-detail{--sp-base:15px}
+.mlbit{display:inline-flex;align-items:center;gap:3px}
+
 .reel.win{border-color:var(--gold);box-shadow:0 0 28px rgba(242,193,78,.55), inset 0 0 26px rgba(242,193,78,.22)}
 .reel.spinning{box-shadow:inset 0 0 18px rgba(0,0,0,.55)}
 .slot-paywrap{margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.07)}
@@ -1258,6 +1323,167 @@ body{
 .cheat-presets{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-start}
 .cheat-presets .btn{flex:1 1 auto;min-width:56px}
 
+/* ============ TEXAS HOLD'EM ============ */
+.ht-wrap{flex:1 1 auto;display:flex;flex-direction:column;gap:11px;min-height:0;justify-content:center}
+.ht-head{display:flex;flex-wrap:wrap;gap:7px 14px;align-items:center;justify-content:space-between}
+.ht-facts{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:9.5px;letter-spacing:1.1px;text-transform:uppercase;color:#93a6c2}
+.ht-facts b{color:#e6f0ff;font-family:'Bebas Neue',Impact,sans-serif;font-size:12.5px;letter-spacing:.9px}
+.ht-facts i{color:#5cf39a;font-style:normal}
+.ht-segwrap{display:flex;align-items:center;gap:7px}
+.ht-seglabel{font-size:8.5px;letter-spacing:2px;color:var(--muted)}
+.ht-seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#0b1120}
+.ht-segbtn{background:transparent;border:0;border-left:1px solid var(--line);color:#b9c6de;font-family:inherit;
+  font-size:10px;padding:4px 9px;cursor:pointer;letter-spacing:.5px;transition:.14s}
+.ht-segbtn:first-child{border-left:0}
+.ht-segbtn:hover:not(:disabled){background:#16203a;color:#e6f0ff}
+.ht-segbtn.on{background:linear-gradient(180deg,#f2c14e,#b8842a);color:#2c1d00;font-weight:800}
+.ht-segbtn:disabled{opacity:.45;cursor:default}
+
+.ht-table{
+  position:relative;width:100%;max-width:880px;margin:0 auto;overflow:hidden;
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr);
+  grid-template-rows:auto auto auto;
+  grid-template-areas:". top ." "left center right" ". hero .";
+  gap:7px 10px;padding:10px 12px 12px;border-radius:20px;
+  background:
+    radial-gradient(120% 95% at 50% -20%,rgba(255,255,255,.11),transparent 56%),
+    radial-gradient(85% 72% at 50% 44%,#1f7a52 0%,#14593c 46%,#0b3526 100%);
+  border:1px solid #2f8a61;
+  box-shadow:inset 0 0 70px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.08),0 16px 40px rgba(0,0,0,.42);
+}
+.ht-table::after{content:"";position:absolute;inset:8px;border-radius:13px;border:1px solid rgba(242,193,78,.2);pointer-events:none;z-index:1}
+.ht-felt-glow{position:absolute;left:50%;top:-42%;width:72%;height:130%;transform:translateX(-50%);
+  background:radial-gradient(closest-side,rgba(255,255,255,.15),transparent 72%);pointer-events:none;opacity:.7;z-index:0}
+
+.ht-center{grid-area:center;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;min-width:0;position:relative;z-index:3}
+.ht-street{font-family:'Bebas Neue',Impact,sans-serif;font-size:13px;letter-spacing:3.4px;color:rgba(226,240,232,.7)}
+.ht-board{display:flex;gap:6px;justify-content:center;flex-wrap:nowrap}
+.ht-slot{width:52px;height:76px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  border:1px solid rgba(255,255,255,.1);background:rgba(4,26,18,.24)}
+.ht-pot{display:flex;align-items:center;gap:7px;padding:2px 11px;border-radius:99px;
+  background:rgba(4,26,18,.72);border:1px solid rgba(242,193,78,.35)}
+.ht-pot .k{font-size:8.5px;letter-spacing:2.4px;color:rgba(242,193,78,.8)}
+.ht-pot .v{font-family:'Bebas Neue',Impact,sans-serif;font-size:17px;letter-spacing:1px;color:#ffe9a8}
+.ht-pot .v.pop{animation:scorePop .34s cubic-bezier(.2,1.6,.5,1)}
+.ht-potchips{display:flex;align-items:center}
+
+.ht-seat{position:relative;display:flex;gap:6px;align-items:center;min-width:0;position:relative;z-index:3;transition:.2s}
+.ht-seat.ht-top{grid-area:top;flex-direction:row;align-items:center}
+.ht-seat.ht-left{grid-area:left;flex-direction:row}
+.ht-seat.ht-right{grid-area:right;flex-direction:row-reverse}
+.ht-seat.ht-hero{grid-area:hero;flex-direction:column-reverse;align-items:center}
+.ht-cards{display:flex;gap:4px;align-items:center;min-height:0}
+.ht-seat.ht-left .ht-cards,.ht-seat.ht-right .ht-cards{flex-direction:column;gap:3px}
+.ht-seat .card{width:42px;height:58px}
+.ht-seat .card .corner{font-size:9.5px}
+.ht-seat .card .pip{font-size:19px}
+.ht-seat.human .card{width:54px;height:77px}
+.ht-seat.human .card .corner{font-size:12px}
+.ht-seat.human .card .pip{font-size:25px}
+.card.crown .card-face{box-shadow:0 0 0 2px var(--gold),0 0 16px rgba(242,193,78,.55)}
+.ht-slot .card{width:52px;height:76px;animation:none}
+.ht-board .card{width:52px;height:76px}
+
+.ht-plate{display:flex;flex-direction:column;gap:1px;padding:5px 9px;border-radius:10px;
+  background:rgba(6,24,17,.66);border:1px solid rgba(255,255,255,.12);min-width:118px;max-width:150px;
+  box-shadow:0 6px 16px rgba(0,0,0,.3)}
+.ht-id{display:flex;align-items:center;gap:4px;min-width:0}
+.ht-name{flex:1 1 auto;font-weight:800;font-size:11.5px;color:#eafff3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ht-dbtn{font-size:8px;font-weight:900;color:#2c1d00;background:var(--gold);border-radius:50%;
+  width:13px;height:13px;display:grid;place-items:center;flex:0 0 auto}
+.ht-style{font-size:7.5px;letter-spacing:.7px;text-transform:uppercase;color:#8fbca6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ht-stack{flex:0 0 auto;font-family:'Bebas Neue',Impact,sans-serif;font-size:12.5px;letter-spacing:.4px;color:var(--gold)}
+.ht-badge{font-size:8.5px;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;padding:1px 6px;border-radius:99px;
+  border:1px solid transparent;opacity:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:.18s}
+.ht-badge.on{opacity:1;animation:tagPop2 .3s cubic-bezier(.2,1.5,.5,1)}
+@keyframes tagPop2{0%{transform:scale(.7)}60%{transform:scale(1.1)}100%{transform:scale(1)}}
+.ht-badge.call{color:#bfe9ff;border-color:#2d5f7d;background:rgba(20,50,68,.55)}
+.ht-badge.raise{color:#ffe9a8;border-color:#7a5a12;background:rgba(72,50,8,.6)}
+.ht-badge.allin{color:#2c1d00;background:linear-gradient(180deg,#f2c14e,#b8842a);border-color:#8a611c;font-weight:800}
+.ht-badge.fold{color:#ff9aa5;border-color:#5c2029;background:rgba(60,16,22,.5)}
+
+.ht-bet{display:flex;align-items:center;gap:5px;opacity:0;transition:opacity .2s}
+.ht-bet.on{opacity:1}
+.ht-seat.ht-left .ht-bet,.ht-seat.ht-right .ht-bet{position:absolute;top:calc(100% + 2px);left:50%;transform:translateX(-50%);white-space:nowrap}
+.ht-chips{display:flex;align-items:center}
+.ht-chip{width:14px;height:14px;border-radius:50%;margin-left:-6px;flex:0 0 auto;
+  border:1px solid rgba(0,0,0,.45);box-shadow:0 1px 3px rgba(0,0,0,.5)}
+.ht-chip:first-child{margin-left:0}
+.ht-chip.d1{background:radial-gradient(circle at 35% 30%,#e9b184,#a8642f)}
+.ht-chip.d2{background:radial-gradient(circle at 35% 30%,#a9c7ff,#3f5fb0)}
+.ht-chip.d3{background:radial-gradient(circle at 35% 30%,#fff3cc,#b8842a)}
+.ht-betamt{font-size:10px;letter-spacing:.5px;color:#d8e9de}
+
+.ht-seat.turn .ht-plate{border-color:var(--gold);box-shadow:0 0 0 2px rgba(242,193,78,.6),0 0 20px rgba(242,193,78,.35)}
+.ht-seat.human.turn .ht-plate{background:rgba(48,38,6,.72)}
+.ht-seat.folded{opacity:.5}
+.ht-seat.folded .ht-cards{filter:grayscale(.85)}
+.ht-seat.allin .ht-plate{border-color:#8a611c}
+.ht-seat.win .ht-plate{border-color:#5cf39a;box-shadow:0 0 0 2px rgba(92,243,154,.6),0 0 24px rgba(92,243,154,.4)}
+.ht-seat.win{animation:htWin .5s cubic-bezier(.2,1.4,.4,1)}
+@keyframes htWin{0%{transform:scale(1)}45%{transform:scale(1.05)}100%{transform:scale(1)}}
+.ht-seat.lose .ht-plate{border-color:#5c2029}
+.ht-seat.lose{opacity:.72}
+
+.ht-msg{font-family:'Bebas Neue',Impact,sans-serif;font-size:18px;letter-spacing:1.3px;min-height:23px;color:#d5e3da}
+.ht-msg.win{color:#5cf39a;text-shadow:0 0 18px rgba(92,243,154,.45)}
+.ht-msg.lose{color:#ff8f9b}
+.ht-msg.push{color:#ffd97a}
+.ht-msg .ht-mult{font-family:inherit;font-size:14px;letter-spacing:1.2px;color:#9fb0cc}
+
+.ht-actions{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+.ht-actions .btn{min-width:112px;padding:8px 12px}
+.ht-raisrow{flex:1 1 100%;display:flex;align-items:center;gap:8px;transition:opacity .18s}
+.ht-rlabel{font-size:8.5px;letter-spacing:2.2px;color:var(--muted)}
+.ht-ramt{font-family:'Bebas Neue',Impact,sans-serif;font-size:17px;letter-spacing:1px;color:var(--gold);min-width:66px;text-align:right}
+.ht-slider{flex:1 1 auto;min-width:0;height:20px;accent-color:#f2c14e;cursor:pointer}
+.ht-slider:disabled{cursor:default;opacity:.45}
+.ht-quickrow{flex:1 1 100%;display:flex;gap:6px;flex-wrap:wrap;transition:opacity .18s}
+.ht-qbtn{flex:1 1 auto;min-width:54px;background:#141c2d;border:1px solid var(--line);border-radius:8px;color:#c3cfe6;
+  font-family:inherit;font-size:10px;letter-spacing:.9px;padding:5px 8px;cursor:pointer;transition:.14s}
+.ht-qbtn:hover:not(:disabled){border-color:var(--gold);color:#ffe9a8}
+.ht-qbtn.allin{border-color:#7a5a12;color:#ffe9a8;background:#1c1508}
+.ht-qbtn:disabled{opacity:.4;cursor:default}
+.ht-raisrow.off,.ht-quickrow.off{opacity:.32;pointer-events:none}
+
+@media (max-width:640px){
+  .ht-table{
+    display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px;
+    padding:10px 8px 12px;border-radius:16px;
+  }
+  .ht-center{order:2;flex:1 1 100%}
+  .ht-seat{order:1;flex:0 1 auto}
+  .ht-seat.human{order:3;flex:1 1 100%}
+  .ht-seat.ht-top,.ht-seat.ht-left,.ht-seat.ht-right{grid-area:auto;flex-direction:column;align-items:center}
+  .ht-seat.ht-left .ht-cards,.ht-seat.ht-right .ht-cards{flex-direction:row;gap:3px}
+  .ht-seat .card{width:42px;height:60px}
+  .ht-seat .card .corner{font-size:10px}
+  .ht-seat .card .pip{font-size:19px}
+  .ht-seat.human .card{width:56px;height:80px}
+  .ht-seat.human .card .corner{font-size:13px}
+  .ht-seat.human .card .pip{font-size:26px}
+  .ht-slot,.ht-slot .card,.ht-board .card{width:46px;height:66px}
+  .ht-plate{max-width:118px;padding:4px 7px}
+  .ht-name{font-size:10.5px}
+  .ht-stack{font-size:13px}
+  .ht-badge{font-size:7.5px;letter-spacing:1.1px}
+  .ht-board{gap:4px}
+  .ht-pot .v{font-size:17px}
+  .ht-msg{font-size:17px;letter-spacing:1.1px}
+  .ht-msg .ht-mult{font-size:12.5px}
+  .ht-actions .btn{min-width:0;flex:1 1 30%;padding:9px 6px;font-size:12px}
+  .ht-ramt{min-width:52px;font-size:15px}
+}
+@media (max-width:520px){
+  .ht-seat .card{width:38px;height:54px}
+  .ht-seat.human .card{width:50px;height:72px}
+  .ht-slot,.ht-slot .card,.ht-board .card{width:42px;height:60px}
+  .ht-seat{flex-direction:column;align-items:center}
+  .ht-facts{font-size:9px;letter-spacing:1px}
+  .ht-facts b{font-size:12px}
+  .ht-actions .btn{font-size:11.5px}
+}
+
 /* ============ RESPONSIVE ============ */
 @media (max-width:1080px){
   #layout{grid-template-columns:150px minmax(0,1fr) 260px}
@@ -1316,6 +1542,7 @@ body{
   .toolbtn{padding:7px 10px;font-size:11px}
   .shopbtn{padding:7px 10px;font-size:11px}
   .idlebet input{width:52px}
+  #siteFoot{padding:6px 12px;justify-content:center;text-align:center}
   .arcade-hud{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
   .arcade-dpad{grid-template-columns:repeat(3,42px);grid-template-rows:repeat(3,38px);gap:5px}
   .ahud .v{font-size:17px}
@@ -1329,7 +1556,8 @@ body{
   .fbtn .key{display:none}
   .fd-label{min-width:90px;font-size:11px}
   .chest-grid{gap:7px}
-  .chest-icon{font-size:clamp(26px,9vw,38px)}
+  .chest-icon{font-size:clamp(26px,9vw,38px);--sp-base:clamp(26px,9vw,38px)}
+  .chest-mult{font-size:13px}
   .chest-mult{font-size:13px}
   .report-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .rt-head,.rt-row{grid-template-columns:1.5fr .6fr .9fr .9fr;padding:7px 9px;font-size:11px}
@@ -1338,7 +1566,9 @@ body{
   .tstat-value{font-size:20px}
   .brand-name{font-size:19px;letter-spacing:1.6px}
   .reel{width:82px;height:102px}
-  .reel-cell{height:102px;font-size:48px}
+  .reel-cell{height:102px;font-size:48px;--sp-base:58px}
+  .slot-result{--sp-base:19px}
+  .paychip{--sp-base:38px}
   .slot-marquee .marquee-title{font-size:17px;letter-spacing:3px}
   .slot-marquee .sub{display:none}
   .infobtn{padding:5px 9px;font-size:15px;gap:0}
@@ -1538,18 +1768,6 @@ body{
 /* ============ NEON RECALL (colour memory) ============ */
 .mem-wrap{flex:1 1 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:0}
 .mem-cab{padding:12px 14px 14px;width:100%;max-width:560px}
-.mem-modes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px}
-.mem-mode{
-  text-align:left;cursor:pointer;padding:8px 10px;border-radius:11px;
-  border:1px solid var(--line2);background:linear-gradient(180deg,#1c2740,#121a2a);color:#cdd8ee;
-  font-family:inherit;transition:.15s;
-}
-.mem-mode .mt{display:block;font-family:'Bebas Neue',Impact,sans-serif;font-size:16px;letter-spacing:1.5px}
-.mem-mode .ms{display:block;font-family:'Inter',system-ui,sans-serif;font-size:10px;line-height:1.45;color:var(--muted);margin-top:2px}
-.mem-mode:hover:not(:disabled){background:#22304a;border-color:var(--line2)}
-.mem-mode.on{border-color:var(--gold);background:linear-gradient(180deg,#2a220c,#1a1406);color:#ffe08a;box-shadow:0 0 0 1px rgba(242,193,78,.35),0 8px 22px rgba(242,193,78,.12)}
-.mem-mode.on .ms{color:#cbb673}
-.mem-mode:disabled{opacity:.55;cursor:default}
 .mem-hud{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-bottom:8px}
 .mem-trackwrap{margin-bottom:10px}
 .mem-track{display:flex;gap:3px;height:7px}
@@ -1618,8 +1836,6 @@ body{
   .mem-hud{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
   .mem-hud .ahud:first-child{grid-column:1 / -1}
   .mem-wheel{max-width:260px}
-  .mem-mode .ms{display:none}
-  .mem-mode .mt{font-size:15px}
   .mem-controls{gap:8px}
   .membtn .lbl{font-size:16px;letter-spacing:1.2px}
   .membtn .key{display:none}
@@ -1910,6 +2126,8 @@ body{
 .cloud-pill.busy{color:#cdbcff;border-color:#463083;background:rgba(160,107,255,.10)}
 .cloud-conflict{display:flex;flex-direction:column;gap:12px}
 .cloud-conflict .cloud-lead{color:#dbe4f7}
+.cloud-privacy{display:flex;justify-content:flex-end}
+.cloud-plink{display:inline-block;text-decoration:none;letter-spacing:1.2px}
 
 @media (max-width:640px){
   .cloudbtn{padding:7px 9px;gap:5px}

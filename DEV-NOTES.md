@@ -27,8 +27,41 @@ This file is the architecture map.
 | `src/games/common.js` | `stageShell()` (the shared machine chrome), `clamp`, `round2` |
 | `src/games/infocard.js` | "HOW TO WIN" card helpers: `svgEl`, `openInfo`, `sec`, `ul`, `note`, `cap`, `payChips` |
 | `src/games/*.js` | one machine each |
+| `src/sprites.js` | the symbol-artwork module: turns a sprite *name* into `<img>` markup of a consistent visual size (see "Symbol artwork" below) |
 | `src/styles.css` | one section per machine (see the `============ NAME ============` banners) |
 | `src/*-math.js` | pure RTP/EV helpers kept out of the DOM code |
+
+## Symbol artwork (`src/sprites/`)
+
+`src/sprites/` holds 70 cut-out symbol PNGs (names + cut recipe in
+[`sprites/README.md`](sprites/README.md)). `src/sprites.js` is the only file that knows where they
+live and how big each one's art is:
+
+- `spriteEl(name, { base, fallback, cls, alt })` → an `<img class="spr">`. `fallback` is the emoji to
+  swap in on a load error, so a partial mirror upload degrades to the old look instead of broken
+  images. `spriteRow(items)` is a row of them, `spriteHtml(name)` is the same thing as inline markup
+  for the html-string info cards and `payoutNote()`s, and `preloadSprites(names)` warms the cache in
+  `create()` so the first spin/frame does not flash empty.
+- **Sizing**: every file is 148 × 148 with the art tight-cropped, so the files are not visually
+  interchangeable. `BOX` in `src/sprites.js` records each sprite's real art size, every `<img>` gets
+  `--sp-k = 148 / the art's longest side`, and `.spr` in `styles.css` keeps the image box square at
+  `--sp-base` and scales the image by `--sp-k`. A container therefore sets `--sp-base` = how big the
+  *artwork* should look (there is a list of per-container defaults in the `symbol artwork` block of
+  `styles.css`); never set `font-size` for these. The box deliberately stays `--sp-base` rather than
+  growing with the crop: an `<img>` wider than its cell is pushed to one edge by grid/flex centring
+  instead of being centred, which is what made the wide symbols sit off-centre before.
+- **Paths** are resolved relative to the module (`new URL("sprites/", import.meta.url)`), which is
+  what makes the same code work on Perchance (`/src/sprites.js` → `/src/sprites/*.png`) *and* on the
+  GitHub Pages mirror, where the `src/` prefix is stripped (`/sprites.js` → `/sprites/*.png`).
+  The mirror therefore needs the `sprites/` folder and `sprites.js` re-uploaded when either changes.
+- **Who uses it**: Slots, Fortune Lines and Treasure Chests — the machines whose *content* is
+  symbols. The machine nav icons are deliberately still emoji (they are also interpolated into prose
+  all over `src/main.js`). Everything else in the folder is unused and available: `rocket`/`explosion`
+  would suit Crash's canvas-drawn rocket, `wheel`, `dice`, `cash`, `jackpot` etc. are unused.
+- Balance is untouched by any of this: sprite names are *per-machine* fields next to the existing
+  `glyph`, and the only id that changed was Fortune Lines' `banana` symbol, renamed **`watermelon`**
+  in `src/games/slots-multi-math.js` (id, glyph and sprite together — pay values and reel weights were
+  not touched).
 
 ## The machine contract
 
@@ -218,14 +251,17 @@ the game files** — every lever below is a `CONFIG` value and every machine rea
   winner rig overrides luck to 0.75 (which is why the rig still works). Every machine's luck
   coefficient is tuned so that at the cap that machine still returns **less than 100%** — luck is an
   edge, never a printer.
-- **Perks** are **bounded by the stake**, never by the payout: `winBonusStack` 0.005 (Fat Stacks, 50
-  stacks = **+25% of the stake on a win**), `rebateStack` 0.005 (Safety Net, 20 stacks = **+10% of
-  the stake back on a loss**), `limitStack` 0.001 (Fortune: +0.1% table limit per stack, endless).
-  Stack caps live in `src/perks.js`. They apply **on top of** the game's own multiplier in
-  `applyPerks()`, so a 200× jackpot can never ride them upward — but see the power-curve note under
-  the returns table: at these sizes they are the one lever that *can* carry a high-frequency table
-  over 100%. Tables that opt out (`noPerks: true`, blackjack) skip them entirely.
-- **Table limit.** `tableLimitBase` 400 × `level^tableLimitExp` 1.35 × the Fortune multiplier. It is
+- **Perks** — two of the three are **bounded by the stake**, never by the payout: `winBonusStack` 0.005
+  (Fat Stacks, 50 stacks = **+25% of the stake on a win**), `rebateStack` 0.005 (Safety Net, 20 stacks
+  = **+10% of the stake back on a loss**). The third is the endless one: `profitStack` 0.001
+  (**Fortune: +0.1% of the *profit* on a winning round per stack, forever**), which is a flat
+  percentage of the win and therefore *does* ride a big multiplier — deliberately, see the power-curve
+  note below. It can never invent money on a round that did not win (a loss and a push are untouched),
+  and it never touches the odds. Stack caps live in `src/perks.js`, and all three apply **on top of**
+  the game's own multiplier in `applyPerks()`. Tables that opt out (`noPerks: true`, blackjack) skip
+  them entirely.
+- **Table limit.** `tableLimitBase` 400 × `level^tableLimitExp` 1.35 — **the level is the only thing
+  that moves it** (Fortune used to stretch it too; that perk now pays profit instead). It is
   the most you may stake on **one round of any machine** (`tableLimit()` in `main.js`; a machine may
   override it down with `maxBet()`, never up), and it caps the round's LOSS as much as its win. It is
   printed in the bet panel. Level 1 → $400, level 30 → ~$39k, level 60 → ~$100k.
@@ -238,17 +274,17 @@ the game files** — every lever below is a `CONFIG` value and every machine rea
   says so: a machine may declare `maxWinMult` on its descriptor, the best multiplier one bet unit can
   pay, and `renderBetTotal()` prints `game.maxWinMult × the round stake` (falling back to the house
   value). Shipped: slots ×200 (the star triple), Roulette ×36 (a straight), Blackjack ×2.5 (a natural),
-  Horse ×60 (the payout clamp), Ghost Muncher ×4.9 (`WIN_SHARE × POT_CAP`), Treasure Chests ×4
-  (`chestHigh`), Russian Roulette `TOP_MULT` (the top rung), Neon Recall ×12 (its ladder cap). Each
+  Horse ×60 (the payout clamp), Ghost Muncher ×4.9 (`WIN_SHARE × POT_CAP`), Treasure Chests ×10
+  (`chestHigh`), Russian Roulette `TOP_MULT` (the top rung), Neon Recall ×8 (its ladder cap). Each
   value is *derived from the machine's own constant*, so it cannot drift out of step with the game.
   The bet panel is therefore a truthful "this table cannot pay you more than" line for every table.
 - **Neon Recall's table maximum.** A memory ladder cannot be balanced with odds alone, because a player
   who writes the pattern down beats any fixed chance, so the memory table is the one machine with a
   **limit of its own**: `maxBet(level)` = `memTableBase` (100) × (level + 1), capped at `memTableMax`
   (2000) — $300 at level 2, $2,000 at level 19 and forever after, and it grows with the level exactly
-  like the house limit does. That limit is the hard ceiling on a run: the shipped summit is ×10.88 and
-  the guard cap ×12, so the biggest run a perfect reader can ever cash is 10.88 × $2,000 = **$21,760**,
-  and at level 2 it is 10.88 × $300 = $3,264. Compare that with the ×1,000 crash/slot tail on a
+  like the house limit does. That limit is the hard ceiling on a run: the shipped summit is ×7.35 and
+  the guard cap ×8, so the biggest run a perfect reader can ever cash is 7.35 × $2,000 = **$14,700**,
+  and at level 2 it is 7.35 × $300 = $2,205. Compare that with the ×1,000 crash/slot tail on a
   $21,300 level-19 stake — the memory "guarantee" is four orders of magnitude smaller than the lottery
   tails, which is the right shape for it: bounded, and it needs both a real read and the level first.
 
@@ -266,12 +302,13 @@ into that column — they are a player power curve, not a house-edge term; see t
 | Roulette | 97.30% | ≤97.31% | 36/37 on every sensible bet — every chip is the same size (the bet) and the round is `bet × spots`; red/black are mutually exclusive; luck nudge is `luck·0.05/max(2, bestPay)`, so a straight-up backer converts at most a sliver of losses |
 | Horse Racing | 92.00% | ≤92.74% | `payout = 0.92/p` exactly (the 1.05 floor / 60 cap never bind: `p` ∈ [0.068, 0.353]); luck only inflates your runner's rating, and the relative boost is `(1+b)/(1+p·b) ≤ 1.008` |
 | Rocket Crash | 97.00% | ≤97.48% | `P(crash ≥ m) = 0.97(1+0.06·luck)/m`, flat at every target |
-| Treasure Chests | 93.75% | 93.75% | `(chestHigh+chestGem+chestMid+chestLow)/8`; **the four prizes must sum to < 8** or it prints money |
+| Treasure Chests | 93.75% | 93.75% | `(chestHigh+chestGem+chestMid+chestLow)/8` — four paying chests (one of each) plus one re-pick Lucky Star in a nine-chest grid, so **the four prizes must sum to < 8** (the non-star chests; the `COUNT` in `src/games/chest.js`) or it prints money |
 | Russian Roulette | 90.00% | 90.00% | best play is cash out on rung 1; the first spin already loads **2 live of 6**, so no run is a formality and CASH OUT stays locked until the first blank; `rrRake` ships at 0 so the advertised multiplier is exactly what you keep. Perks are not `noPerks`: Safety Net fires on the third of first spins that end in the live round, so it adds `rebate/3` to the best rung (+3.3% at the 20-stack cap: 0.900 → 0.933) |
 | Blackjack | ~99.5% | ~99.5% | honest S17 3:2 game; **`noPerks: true`** — no luck, no perks, no rigged dealer. This is the one table whose edge is genuinely thin |
+| Texas Hold'em | ~97% (reference) | ≤99.1% | skill; a **fitted** table — every seat pays a flat `holdemFee` 3% of its own buy-in as a **seat charge** and there is **no pot rake** (a rake is a hopeless edge at this depth: you take about a third of the pots and an average pot is about a quarter of a buy-in, so even a 10% rake costs under 1% of the stake). Equal seats paying the same charge are an even game between themselves, so a seat that plays like the others returns exactly `1 − holdemFee` = **97%**, and *out-playing the bots keeps the difference*. Luck buys a **discount on your own seat charge** (`holdemLuckFee` 0.5), never a rigged deal → **98.5%** at the luck cap. The cage's whole-dollar rounding on top is worth up to +0.94% of the stake at a $25 buy-in, which is why the table opens at `holdemMinBet` $50 (from there it is within ±0.21%); the measured return stays under 100% at every stake (worst **0.9911**, a $200 buy-in at the luck cap). See its section below |
 | Ghost Muncher | ≤98% (bot 83%) | — | skill; the exact return is `p · 0.35 · E[pot]`, which peaks at **98%** when `p = 1` — clearing every maze, the farmable outcome, is a 2% *loss*. See its section below |
 | Frogger Gamble | ~0.24 (myopic bot); **unbounded** for a patient player | — | skill; **cars are the only thing that can kill you** and the grass has no clock, so a patient planner's return climbs from **1.19** (3s of grass patience) to **4.72** (unlimited) — the old no-win ceiling was retired with the sweep clock at the player's request. A careless bot returns ~0.24. See "Frogger balance & the god harness" below |
-| Neon Recall | ≤95% (reference) | — | skill; a **fitted** ladder — every rung past the knee is a fair bet for the reference player, whose return is flat at 95%, and every rung up to it pays exactly ×1.00, so there is no free money. Summits ×5.01 / ×10.88; hard ceiling $21,760 a run via its own table limit |
+| Neon Recall | ≤95% (reference) | — | skill; a **fitted** ladder — every rung past the knee is a fair bet for the reference player, whose return is flat at 95%, and every rung up to it pays exactly ×1.00, so there is no free money. The ladder starts to pay at 6 colours (the 5-colour knee, tuned down from 8 at the player's request: ×1.08 at 6) and its summit is ×7.35; hard ceiling $14,700 a run via its own table limit |
 
 **The invariants to preserve:** no single round of any machine pays more than `maxWinMult` × the stake,
 **luck alone never pushes a table to 100%** (every row above is under 100% with `luck` at its cap), and
@@ -281,19 +318,32 @@ deliberately stripped of luck and perks for exactly that reason. **Frogger is th
 exception** — its grass is safe with no clock (the player asked for cars-only deaths), so a patient
 player can wait out a clean road and beat the ladder deliberately. It is slow rather than automatic and
 it is a trade that was made on purpose, but until a clock or an idle payout decay is put back, do not
-claim the farmability audit covers all eleven machines.
+claim the farmability audit covers all twelve machines.
 
 **Power-curve note (perk retune).** The perk *payout* bonuses are no longer tiny, and — unlike luck —
 they are not EV-neutral: a win bonus `w` adds `w · P(win)` to a round's return, a rebate `r` adds
 `r · P(loss)`, so any table winning more than ~11% of its rounds crosses 100% once Fat Stacks is deep
 enough. Concretely, Roulette's red/black (P(win) 48.6%, base 97.30%) passes 100% at **12 Fat Stacks**
 and reaches **~114.6%** with both money perks maxed (+12.2% win bonus, +5.1% rebate); Rocket Crash at a
-2× target and the other ~50%-win tables (Horse, Slots, Treasure Chests) follow a few stacks behind. So
+2× target and the other high-frequency tables (Horse, Slots) follow a few stacks behind, and Treasure
+Chests — P(win) 50%, now that four of nine chests pay and one is a re-pick star — crosses later still. So
 perks are now a *power curve* the player grinds toward, and a fully perked regular is meant to be able
 to beat the house. **If the house must ever be unbeatable again, the only lever is the perk constant** —
-lower `winBonusStack` / `rebateStack` in `main.pjs` (with their `cfg()` fallbacks in `state.js`) —
-because every machine's odds, ladder and paytable is fitted to its **base** return and must not be
-retuned to compensate.
+lower `winBonusStack` / `rebateStack` (or `profitStack`) in `main.pjs` (with their `cfg()` fallbacks in
+`state.js`) — because every machine's odds, ladder and paytable is fitted to its **base** return and
+must not be retuned to compensate.
+
+**Fortune is the fourth term, and it is the one that scales with the win.** A profit bonus `p` adds
+`p · E[profit | win] · P(win)` to a round's return, so unlike the stake-bounded perks it is worth most
+on the *big-multiplier* tables (crash's and slots' tails), not the high-frequency ones, and it is
+faithful to the reward the player actually sees ("+0.1% of the profit"). It is also endless, which is
+the point — the price of a stack grows 1.35× each time while the reward grows linearly, so it is a
+long-run commitment rather than a fast lever — but it means **no table has a hard 100% ceiling any
+more**: enough Fortune stacks will carry any of them over, and that is the designed outcome of the
+power curve above, not a bug. What Fortune cannot do is manufacture a win out of a loss or a push
+(`applyPerks` only pays it on `profit > 0`), and it cannot beat the house maximum: `maxWinMult` is
+applied *before* perks, so a ×1000 hit pays ×1000 plus the profit bonus, never more than the stake
+times ×1000 × (1 + a little).
 
 **No fast money (the farmability audit).** The average return is the *second* thing to check; the first
 is whether any single rung can be farmed. The audit, machine by machine, looks for an outcome that is
@@ -304,8 +354,8 @@ is whether any single rung can be farmed. The audit, machine by machine, looks f
   compounded to ×294.81 / ×771.49 on top of it. It is now **fitted**: a rung pays `memLadderRtp`
   divided by the reference player's chance of reaching that rung, so the low rungs pay **exactly ×1.00**
   (a push — and zero XP, because XP is charged on profit, so there is no churn loop either) and the
-  reference player's return is flat at 95% at every rung past the knee. The summit is ×5.01 / ×10.88
-  and the machine's table limit caps the run at $21,760.
+  reference player's return is flat at 95% at every rung past the knee. The summit is ×7.35 and the
+  machine's table limit caps the run at $14,700.
 - **Ghost Muncher** used to be a printer: `0.35 · (5p + 0.25(1−p))` for a clear rate `p`, which is
   **1.75× for a perfect player** and crosses even at `p ≈ 0.549`. The pot is now `arcadePotBase` 2.8 /
   `arcadePotStep` 2.1 / `arcadePotCap` 14, and the exact return is `p · 0.35 · E[pot]` — 0.83 at the
@@ -326,7 +376,7 @@ is whether any single rung can be farmed. The audit, machine by machine, looks f
   not a death clock.
 - **Tails are bounded, not grindy.** `maxWinMult` 1000 is a *lottery*, not a grind: crash's ×1,000 tail
   is about 1 round in 1,000 at a 2.00 target (and the target input itself is clamped at the max), the
-  slot five-of-a-kind is rarer still, and the memory summit is ladder-capped at ×10.88. Nothing on that
+  slot five-of-a-kind is rarer still, and the memory summit is ladder-capped at ×7.35. Nothing on that
   list can be *worked toward*, which is the property that makes a top end safe.
 
 **How the numbers were checked.** Slots and Fortune Lines were re-derived outside the page (the
@@ -656,61 +706,86 @@ use the sim to catch a broken formula, not to set the number.
   how long the gap between them is. Everything tunable lives in main.pjs (`mem*` → `CONFIG`).
 
   **The ladder is `memLevels` (19) LEVELS, one colour each** — a difficulty ladder, not a length-ceiling
-  race. SEQUENCE opens at `memStartLen` (3 colours) and tops out at 3 + 18 = **21**; RANDOM opens at
-  `memRandStartLen` (5), because a freshly re-rolled three-colour pattern is no test at all, and tops
-  out at 5 + 18 = **23**. Because the two modes have *different* maxima, the single module-level
-  `maxLen` is gone: `startFor(mode)` and `maxLenFor(mode)` are the only accessors. Both modes run
-  exactly `levels` passes and the pip track shows `levels` pips in both, so nothing may assume the old
-  per-mode pass counts. `setMode()` rebuilds the pip track (the mode is locked mid-run, so there is
-  never a live run to invalidate), and the info card's ladder is keyed by **colour count, not pass** —
-  with the 3-colour row printing a dash in the RANDOM column. A pass-keyed table would sit SEQUENCE's
-  3-colour first pattern next to RANDOM's 5-colour one and quietly lie about the payouts; the ladder's
-  bar is **square-root** scaled, because the bank only spans ×1.00 to ×10.88 and a linear bar squashed
-  every rung under the summit into an invisible stub.
+  race. It opens at `memStartLen` (3 colours) and tops out at 3 + 18 = **21**. There is a single mode
+  now: the pattern keeps its order and appends one colour a pass, so nothing is ever re-rolled and
+  there is nothing to choose before a run starts. (There used to be a second, harder RANDOM mode that
+  re-rolled the whole pattern at the new length every pass, opened at 5 colours and ran to 23 for a
+  ×10.88 summit; it was removed at the player's request — one ladder, one opening length, one summit,
+  no toggle and no `setMode()`.) One module-level `startLen`/`maxLen` pair replaces the old
+  `startFor(mode)`/`maxLenFor(mode)` accessors, the pip track is built once instead of rebuilt per mode
+  change, and the info card's ladder is keyed by **colour count** with a single ×column (it used to
+  print a dash for lengths a mode could not reach). The ladder's bar is **square-root** scaled, because
+  the bank only spans ×1.00 to ×7.35 and a linear bar squashed every rung under the summit into an
+  invisible stub.
 
   **The ladder is FITTED, not compounded** — this is the balance-critical part. A rung does not pay
   "the previous rung plus a bit"; it pays `memLadderRtp` **divided by the chance the reference player
-  has of reaching that rung**. The reference curve is: perfect to `memSkillKnee` (8) colours, then
-  `memSkillDecay` (0.88) per extra colour in SEQUENCE / `memSkillDecayRand` (0.85) in RANDOM (a
-  genuinely harder read, so it earns more per rung). Two consequences fall straight out of the formula:
+  has of reaching that rung**. The reference curve is: perfect to `memSkillKnee` colours, then
+  `memSkillDecay` per extra colour. Two consequences fall straight out of the formula:
 
   - **The low rungs pay exactly ×1.00.** Everything up to the knee is a fair bet for a player who never
-    misses, so SEQUENCE's first six rungs (3–8 colours) and RANDOM's first four (5–8) pay
-    `memLadderRtp / 1` — and ×1.00 is a bank, not a win: no free money, and no XP either, because XP
-    is charged on profit, so a ×1.00 cash-out cannot be churned.
+    misses, so the first `memSkillKnee` rungs pay `memLadderRtp / 1` — and ×1.00 is a bank, not a win:
+    no free money, and no XP either, because XP is charged on profit, so a ×1.00 cash-out cannot be
+    churned.
   - **The reference player's return is flat at 95% at every rung**, so pushing on is neither free money
-    nor a trap. `multAt(mode, p)` computes the whole ladder from those knobs; there is no
-    `stepOf`/`stepAt` and no step table to keep in sync. Shipped ladders — SEQUENCE, 3–21 colours:
-    `1.00` ×6, then `1.08 1.23 1.39 1.58 1.80 2.05 2.32 2.64 3.00 3.41 3.88 4.40`, summit
-    **×5.01**; RANDOM, 5–23 colours: `1.00` ×4, then
-    `1.12 1.31 1.55 1.82 2.14 2.52 2.96 3.49 4.10 4.83 5.68 6.68 7.86 9.24`, summit **×10.88**.
-    The old ladder compounded a ×1.26 first step and paid ×294.81 / ×771.49 at the top — a fortune in a
-    handful of rounds for anyone who could read — which is why this is fitted now.
-  - `memLadderCap` (8) / `memLadderCapRand` (12) are **inert guards** sitting a hair above the shipped
-    summits (5.01 / 10.88): they exist so a future retune of the decay cannot silently blow past the
-    machine's table maximum. They are not the ceiling — the table limit is (see the balance book).
+    nor a trap. `multAt(p)` computes the whole ladder from those knobs; there is no `stepOf`/`stepAt`
+    and no step table to keep in sync. Shipped ladder, 3–21 colours, with the shipped `memSkillKnee`
+    **5**: `1.00` at 3/4/5, then `1.08 1.23 1.39 1.58 1.80 2.05 2.32 2.64 3.00 3.41 3.88 4.40 5.01 5.69
+    6.46`, summit **×7.35** at 21 colours. The knee is the *only* knob that sets where the ladder
+    starts to pay, and moving it moves every rung with it: the knee used to be 8, which paid ×1.00
+    through 8 colours and topped out at ×5.01. The player asked for the first paid rung (×1.08) to sit
+    at **6 colours**, so the knee came down to 5 — the whole ladder shifts three colours earlier and
+    the summit rises from ×5.01 to ×7.35 as a direct consequence (same formula, one knob), which is
+    why the table maximum matters more than ever (see the balance book). The old pre-fitting ladder
+    compounded a ×1.26 first step and paid ×294.81 at the top — a fortune in a handful of rounds for
+    anyone who could read — which is why this is fitted now.
+  - `memLadderCap` (8) is an **inert guard** sitting a hair above the shipped summit (7.35): it exists
+    so a future retune of the decay cannot silently blow past the machine's table maximum. It is not
+    the ceiling — the table limit is (see the balance book).
 
-  **Faster as it grows, up to a point.** `flashFor(n)`/`gapFor(n)` = base × decay^(n − the mode's
-  opening length), floored at `memMinFlashMs`/`memMinGapMs`, and the ramp is **frozen at
-  `memMaxLen` (20) colours**. That 20 is now purely a *speed* cap: both floors (110 ms flash / 55 ms
-  gap) are already reached around 17 colours, so nothing flashes faster past 20 — the pattern just
-  keeps getting longer. Shipped: flash 330 ms × `memFlashDecay` 0.92 per colour, gap 130 ms ×
-  `memGapDecay` 0.94. Measured live by timing the pads: RANDOM pass 1 (5 colours) cycles every 483
-  ms and is down to 327 ms by pass 6 (10 colours); SEQUENCE pass 1 (3 colours) cycles 485 ms, pass 2
-  (4) 439 ms. Raising the decay toward 1 is what makes long patterns unlearnable rather than merely
-  hard, so retune the floors before the decay.
+  **Faster as it grows, up to a point.** `flashFor(n)`/`gapFor(n)` = base × decay^(n − `memStartLen`),
+  floored at `memMinFlashMs`/`memMinGapMs`, and the ramp is **frozen at `memMaxLen` (20) colours**.
+  That 20 is purely a *speed* cap: both floors (110 ms flash / 55 ms gap) are already reached around
+  17 colours, so nothing flashes faster past 20 — the pattern just keeps getting longer. Shipped: flash
+  330 ms × `memFlashDecay` 0.92 per colour, gap 130 ms × `memGapDecay` 0.94. Measured live by timing
+  the pads: pass 1 (3 colours) cycles every 485 ms, pass 2 (4) 439 ms. Raising the decay toward 1 is
+  what makes long patterns unlearnable rather than merely hard, so retune the floors before the decay.
 
-  **Degenerate-RNG guard in `randomSeq()`.** RANDOM refuses to emit the same pad three times running,
-  which it enforces by re-rolling; a stub `Math.random` that never varies (e.g. `() => 0` in a test)
-  used to spin that loop forever and freeze the whole preview. It now gives up after 64 refusals and
-  accepts the repeat, so a pathological `Math.random` costs a few ms instead of hanging the page.
+  **Degenerate-RNG guard in `randomSeq()`.** The machine refuses to emit the same pad three times
+  running, which it enforces by re-rolling; a stub `Math.random` that never varies (e.g. `() => 0` in a
+  test) used to spin that loop forever and freeze the whole preview. It now gives up after 64 refusals
+  and accepts the repeat, so a pathological `Math.random` costs a few ms instead of hanging the page.
 
   **Verifying it without ears or eyes.** A `MutationObserver` on `.mem-pad` class changes gives the
   exact lit order *and* the dwell times; replay that order with `KeyboardEvent("keydown", {key:"1"…
   "4"})` on `window` to walk pass after pass, and the "WATCH — n colours · Xms each" line prints the
   flash time the machine just used. `document.hidden` is true in the editor preview, but the memory
   machine's timings measure true anyway (measured 483 ms for a 460 ms cycle), so the pass walk above
-  is a real timing check, not a guess.
+  is a real timing check, not a guess. The same walk is how the payout rungs get checked end to end:
+  clear four passes and cash out on the 6-colour rung with `state.bet` at 25 and the money moves by
+  exactly `round(25 × 1.08) − 25 = $2` (verified live, along with the pip titles — pass 19 reads
+  "Pass 19 · 21 colours · ×7.35").
+
+## Treasure Chests: why the board is nine
+
+`games/chest.js` pays the four prizes `chestHigh` 4 / `chestGem` 2 / `chestMid` 1 / `chestLow` 0.5, **one
+chest each**, out of **nine** chests; one of the nine is a "Lucky Star" that pays nothing and hands you a
+free second pick, and the other four are traps.
+
+The star's re-pick is worth exactly the average non-star chest, so a round returns the sum of the four
+prizes over the **eight** non-star chests — `7.5 / 8 = **93.75%**`, the row in the returns table above —
+and `maxWinMult` is `chestHigh` ×4 (the bet panel prints ×4 × stake). The two numbers that must hold:
+**the four prizes always sum to under eight**, and the board is nine cells, so the hit rate is four in
+nine (44%) plus the star's second chance, exactly **50%**.
+
+It was briefly grown to twenty chests with round-number prizes (×10/×5/×2/×1, 18/20 = 90%): same edge,
+but four paying chests out of twenty is a **20%** win rate, which reads as a stingy machine, so the board
+came back to nine with the old paytable and the star. `COUNT` in the module, the `repeat(3, …)` columns
+in `styles.css` and the info card's `gridMap(3, 3, …)` are the layout side of that number — three by
+three — so changing `COUNT` without changing those three leaves the board ragged (or the map the wrong
+size). The star's CSS is `.chest.star` (gold, "PICK AGAIN") and `.chest.star-spent` (grey, "used"), with
+`.chest-msg.star` for the re-pick prompt; `TIER_SPRITE` labels the four paying chests trophy ×4 /
+diamond ×2 / mystery ×1 / coin ×0.5, one chest each, and the other four read "trap" (💀).
 
 ## Frogger balance & the god harness
 
@@ -875,6 +950,86 @@ other two things worth checking live are exactly the player's complaint: **stand
 island 10 for >10s and confirm nothing kills the frog**, then step into a live lane and confirm the SPLAT.
 ---
 
+## Texas Hold'em: a fitted table, not a fixed one
+
+`games/holdem-math.js` is the whole game and it has no DOM — deck and shuffle, the eight hand
+categories and `evalScore`, the Monte-Carlo `equity()` (with a precomputed preflop table), betting
+rounds and legality, side pots, showdown and the bot policy. `games/holdem.js` is the felt on top of
+it: plates, the action bar, the bet slider and the header's seat-charge line. **2 to 4 seats**: one
+human plus **1-3 bots**, chosen with the machine's own 1/2/3 picker (`holdemBots` is only the default
+it opens with; `main.pjs`'s comment says "engine takes 2 to 4 seats").
+
+**The stake is the buy-in, and the seat charge is the edge.** `main.js` charges the stake up front as
+usual; the machine then hands every seat a stack of `stake × (1 − holdemFee)` to play the hand with,
+i.e. every seat pays the House a flat **3% of its own buy-in**. There is **no rake on the pots**, and
+that is the whole design rather than an oversight: at this depth a rake is a hopeless house edge,
+because the player takes on the order of a third of the pots and an average pot is on the order of a
+quarter of a buy-in, so even a **10% rake would cost under 1% of the stake** — while a 10% *seat
+charge* costs exactly 10%. Two consequences make the flat charge the right lever:
+
+- **It is exactly symmetric.** Equal seats that pay the same charge are an even game between
+  themselves; the fee is the only asymmetry between the House and you. So the reference player —
+  the one who plays exactly like the bots do — has an expected final stack equal to their post-fee
+  stack, i.e. a return of `1 − holdemFee` = **97%**, at any stake, any depth and any number of bots.
+- **It is beatable on purpose.** Out-play the table and you keep every chip on it, so this is
+  genuinely a poker table, not a slot machine with cards: **a good player can beat this game**, and
+  that is the intended, documented intent of the machine. It is also why the machine is a *fitted*
+  design like Neon Recall rather than a fixed-odds one — but unlike Neon Recall there is no ladder
+  constant that can be fitted, because the edge is not produced by a paytable at all. If the house
+  must be unbeatable, the lever is `holdemFee` (or a real rake), never the bots.
+
+**Depth.** `holdemDepth` = **25 big blinds** per starting stack, and the bet unit is drawn from the
+*post-fee* stack (`holdem.js` line ~290), so the game is the same shape at every table limit and the
+stake only scales it. 25 is deliberately short and action-heavy — roughly double the pot-win rate of
+a 50-deep game — and the reference return is 97% at either depth.
+
+**Luck is a discount on your own seat charge.** Every other machine's luck nudges its own odds; a
+poker table must not, because a rigged deal is the one thing that would poison the game. So
+`holdemLuckFee` (0.5) buys the player up to **half off their own seat charge**, nothing else: at the
+luck cap the return is `1 − holdemFee × (1 − 0.5)` = **98.5%**. Zero-sum and provable, since the
+discount is a plain transfer that cannot change the relative strengths of the hands.
+
+**The whole-dollar cage and the $50 minimum.** The felt runs on cents (blinds, side pots, split pots)
+and the machine reports the **exact stack ratio**, not a cent-rounded one — rounding the ratio first
+added a second, larger error term. The cage then pays `round(final stack)`, and *that* rounding is a
+real bias rather than noise: a hand that ends in a fold lands on the same cent values nearly every
+time, so it rounds the same way nearly every time. Measured, it is worth up to **+0.94% of the stake
+at a $25 buy-in**, and only ±0.21% from ~$50 up. That is why the table opens at `holdemMinBet` **$50**:
+below it the rounding could out-earn the 3% seat charge. The table limit caps the top end, so early
+on this is a $50-$400 table.
+
+**Chip conservation, and the odd chip.** `settle()` builds the pots level by level (unmatched chips
+come back to their owner uncalled) and, for a split pot, floors each share to the cent and hands the
+leftover cents out one at a time — the dealer's odd-chip rule — instead of rounding each share
+independently, which would mint or burn a cent on every split and quietly bias the table. Total chips
+in the hand are invariant: the only leak in the whole machine is the seat charge.
+
+**How it was measured, and what the number is.** The return is a *proof*, not a sample: any seat
+drawing from the `HOUSE` style distribution (`tightness` 0.42 / `aggression` 0.62 / `bluff` 0.07,
+jittered per seat by `makeStyle`) is an even game, so 97% is exact for the reference player and the
+simulation's job is only to catch a broken formula. Poker hands have enormous variance, so the Monte
+Carlo is noisy: the measured reference return landed in **0.967-0.974** across stakes (the spread is
+the cage rounding, not the poker), the luck-capped effective return measured **0.982-0.987**, and the
+worst single figure ever observed was **0.9911** — a $200 buy-in at the luck cap, still under 100%.
+`opts.instant` measures it fine (unlike frogger/revolver): `state.infMoney = true`, a fixed stake, and
+a few thousand rounds of `casino.playRound(true, {idle:true})` reads `state.stats.byGame.holdem`.
+
+**Driving it live.** `.machine-btn[data-id="holdem"]` mounts it, `.playbtn` is DEAL, `.ht-segbtn` is
+the 1/2/3 bot picker (disabled while the hand is `busy`), `.ht-actions .btn.red/.green/.gold` are
+FOLD / CHECK-CALL / RAISE, `.ht-raisrow.off` means it is not your turn, and `/returned ×/` in
+`.ht-msg` marks the end of a hand. The whole table freezes on modals like every machine.
+
+**Layout invariant (learned the hard way).** The felt is a CSS grid whose **three rows must all be
+`auto`**. A `minmax(0, 1fr)` middle row collapses to zero in an auto-height grid, and the centre
+(street label, board, pot) then overflows its cell and paints **over** the top seat's plate and the
+hero's plate — which reads as "PREFLOP · 4 SEATS printed across the opponent's name". Keep it `auto`
+and keep the felt's content budget in mind: the machine panel gives the felt about **546px** at a
+900px viewport, so the seats, board, hero plate, message and action bar have to fit in that. Also
+note the shared effects layer (`bj-flash` / `bj-burst` / `bj-tag`) lives *inside* `.ht-table` as
+absolutely-positioned invisible nodes — they are expected, not a leak.
+
+---
+
 ## Cloud saves (optional Google sign-in)
 
 `src/cloudsave.js` is self-contained: it owns the button (`#cloudBtn`, hidden unless the feature is
@@ -885,8 +1040,27 @@ so `state.js`'s `cfg("cloudSaves", 1)` fallback wins).
 
 **The contract with the rest of the game:** the local save is the truth. The cloud copy is a mirror
 of `saveSnapshot()`; nothing else in the game ever reads or writes Drive, and losing the cloud copy
-costs the player nothing. Two rules keep that true:
+costs the player nothing. Three rules keep that true:
 
+- **The client ID is baked in** (`CLIENT_ID` at the top of `cloudsave.js`; `window.CASINO_GOOGLE_CLIENT_ID`
+  overrides it). A client ID is public by design. The Perchance build still has the feature off
+  (`cloudSaves = 0`) because the iframe's origin — `https://<generatorPublicId>.perchance.org` — is not
+  on the OAuth client's authorized-JS-origins list, so GIS would answer `origin_mismatch`; add that
+  origin in the Cloud console and flip `cloudSaves` to 1 if it is ever wanted there.
+- **Staying signed in** (`SESSION_KEY`, `loadSession`/`saveSession`/`clearSession`). Google's access
+  tokens are memory-only, so a reload used to *look* exactly like being signed out: the player signed
+  in, synced, and the next load showed "SIGN IN" again — because the silent re-auth that was supposed
+  to bring the session back (`prompt: "none"`) is refused whenever the browser blocks the hidden-iframe
+  round trip (third-party cookies; the default in current Chrome, and it fails the same way in the
+  editor preview, logging `[GSI_LOGGER]: Failed to open popup window`). The token + account are
+  therefore mirrored into localStorage for as long as the token lasts (an hour), and the **account
+  alone** is kept after that: boot fills `S.account` from `SESSION_KEY`, so the player is greeted by
+  name and the button reads **RECONNECT** (status `expired`) instead of resetting to "SIGN IN". A valid
+  token means the boot `silentSignIn()` just works — userinfo + Drive, no prompt, straight to
+  "SYNCED". Expiry is enforced locally (`exp` is never extended) and SIGN OUT clears the key.
+  `fail()` maps *any* failure with a remembered account and no usable token onto `expired`, so a dead
+  token never shows a red "CLOUD !" — but a bad client ID or an over-size save keeps its own error.
+  `cloud.debug.session` exposes save/load/clear/read for testing this without a Google account.
 - **Conflicts always ask, never auto-resolve.** A fresh local run (see `isFreshSnapshot`) can never
   bury a real cloud save; the dialog pre-selects whichever side is *probably* right and a dismissed
   dialog writes a `deferred` marker to localStorage so the same cloud revision is not re-asked (and
@@ -924,3 +1098,35 @@ debounce is 15 s (`AUTO_PUSH_MS`) — a test that asserts the auto-upload has to
 **Manual backup is deliberately first-class.** Download/load a `.json` save works signed out, which
 covers the actual reported problem (a PC that wipes browser storage) without needing a Google
 account at all.
+
+### The privacy policy (`privacy.html`)
+
+The optional cloud save is the reason this project needs a privacy policy at all — Google asks for
+an "Application privacy policy link" on the OAuth consent screen — so the page is written around it,
+and it is honest about the rest: everything else is local-only.
+
+`privacy.html` is fully self-contained (its own `<style>`, no `styles.css`, no images, no scripts)
+on purpose. It has to keep working when it is the only file a visitor lands on, and it must not
+depend on the game's stylesheet path, which differs between the two builds (the mirror resolves
+`styles.css` at the repo root; the Perchance page uses `src/styles.css`). It sits beside
+`src/index.html`, i.e. at the **repo root of the GitHub Pages mirror**.
+
+It is linked from two places in the game, and both take their `href` from `privacyUrl()` in
+`src/ui.js` because the correct address differs per build:
+
+- the footer strip (`#siteFoot` / `#privacyLink`) that is on every screen — this also satisfies the
+  "link must be reachable from the app's home page" half of the Google requirement;
+- a `PRIVACY POLICY ↗` button at the bottom of the cloud panel (`panelBody()` in `cloudsave.js`).
+
+`privacyUrl()` returns a relative `privacy.html` unless the page is being served from
+`perchance.org`, where no such file exists next to it and it falls back to `MIRROR_PRIVACY_URL` (the
+published GitHub Pages copy). The relative form is deliberate on the mirror: it survives a repo
+rename, a custom domain, or a fork. The static `href` attributes differ for the same reason
+(relative in `src/index.html`, absolute in the Perchance `index.html`) so the link still works if
+the script never runs.
+
+Keep it in step with reality if the game's storage ever changes. The part that has to stay accurate
+is section 2's table of `localStorage` keys — `casino-royale.save.v1`, `.sound.v1`, `.music.v1`,
+`.device.v1`, `.cloud.session.v1`, `.cloud.deferred.v1` — which is the complete list of what the
+game writes, plus section 4 on the two Google scopes (`drive.appdata`, `userinfo.email`) and where a
+signed-in player can delete the cloud file or revoke access.
