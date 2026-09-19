@@ -5,8 +5,6 @@ This file is the architecture map.
 
 ## How the page loads
 
-- The Perchance generator's real page is the **repo-root** `index.html` (it loads `src/styles.css`
-  and `src/main.js` by relative path).
 - `src/index.html` is a **separate copy** kept only as the GitHub Pages entry point (it loads
   `styles.css` / `main.js` with the `src/` prefix stripped). Change both when you change the shell,
   or at least keep their `<meta>`/`<title>` in sync.
@@ -51,7 +49,7 @@ live and how big each one's art is:
   growing with the crop: an `<img>` wider than its cell is pushed to one edge by grid/flex centring
   instead of being centred, which is what made the wide symbols sit off-centre before.
 - **Paths** are resolved relative to the module (`new URL("sprites/", import.meta.url)`), which is
-  what makes the same code work on Perchance (`/src/sprites.js` → `/src/sprites/*.png`) *and* on the
+  what makes the same code work (`/src/sprites.js` → `/src/sprites/*.png`) *and* on the
   GitHub Pages mirror, where the `src/` prefix is stripped (`/sprites.js` → `/sprites/*.png`).
   The mirror therefore needs the `sprites/` folder and `sprites.js` re-uploaded when either changes.
 - **Who uses it**: Slots, Fortune Lines and Treasure Chests — the machines whose *content* is
