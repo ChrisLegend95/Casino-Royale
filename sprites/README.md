@@ -10,9 +10,27 @@ the `src/sprites.js` module (the only file that knows these paths and sizes):
 
 | machine | symbols | file(s) |
 |---|---|---|
-| Slots (`src/games/slots.js`) | cherry, lemon, bell, diamond, seven, star | those six |
-| Fortune Lines (`src/games/slots-multi.js`) | cherry, lemon, watermelon, grapes, bell, diamond, seven, star, wild, bonus (scatter) | those ten |
+| Slots (`src/games/slots.js`) | cherry, lemon, bell, diamond (the `gem` symbol), seven, wild | those six |
+| Fortune Lines (`src/games/slots-multi.js`) | cherry, lemon, watermelon, grapes, bell, diamond, seven, star, wild, bonus (scatter), jackpot | those eleven |
+| Wheelhouse (`src/games/slots-wheel.js`) | cherry, lemon, orange, plum, bell, coin, diamond (the `gem` symbol), seven, crown, wild, wheel (scatter), jackpot | those twelve |
 | Treasure Chests (`src/games/chest.js`) | closed chest `treasure`, trap `skull`, prizes `trophy`, `diamond`, `mystery` (cash), `coin` | those six |
+
+The `jackpot` sign (row 6, column 3 — the red/gold marquee with the crown and flames) is the
+**progressive symbol** on the **two 5-reel machines**: three of them anywhere on a machine's drums
+empty **that machine's own pot** — each cabinet keeps a separate bank, so a sign never empties another
+machine's (see `DEV-NOTES.md` → "The jackpots"). The sign pays no line multiplier on either machine —
+it is a scatter (see `DEV-NOTES.md` → "The wild's weight"). Wherever the sign is drawn on a drum it is
+ringed in the meter pod's red (`.jcell`), so it is recognisable in a spin as well as on the card.
+
+**Lucky Sevens (the first machine) carries no jackpot and draws no sign** — and, since the player had
+the machine's dead stop removed, **no blank window either**. Its drum carried a seventh symbol that was
+never artwork: a drawn "blank window" that paid nothing and killed any line it landed on, five units of
+dead reel weight that held its old, richer ladder (4/7/14/34/60) at 95.68%. That plate read as debris
+left over from the jackpot sign, and off the player's request it came off the drum; the ladder came down
+with it (3/5/10/25/50 on the triples, the pair pays untouched) so the return is exactly what it was.
+Every symbol on that cabinet is now a sprite from this folder, so it has **no row of its own** and
+nothing to mirror — the six rows above that mention cherry, lemon and bell serve it like any other
+machine.
 
 The emoji each one replaced is kept in the game source as the **fallback** — `src/sprites.js` swaps
 the `<img>` for the emoji if its file cannot be loaded, so a partial mirror upload degrades to the
