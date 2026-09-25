@@ -65,6 +65,7 @@ export function makeDeck() {
 }
 export function cardId(c) { return RI[c.r] * 4 + c.s; }
 export function cardText(c) { return c.r + SUITS[c.s]; }
+export function rankVal(c) { return RV[c.r]; }
 
 export function shuffle(a, rng = Math.random) {
   for (let i = a.length - 1; i > 0; i--) {
@@ -222,6 +223,195 @@ export function scoreName(score) {
   }
 }
 export function catLabel(score) { return CAT_NAME[catOf(score)]; }
+
+/* ---------- whose hand is it? -------------------------------------------
+   The evaluator answers "how good is the best five of these seven?". The
+   helper chip under the hero's cards has to answer a different question --
+   "what do I actually have?" -- because the board is shared. A beginner
+   reads "pair of sixes" on a 6-6-Q-3-2 board as their own pair when the two
+   sixes are the table's and their king and seven are only kickers, which is
+   exactly the misreading this breaks down.
+
+   The way in is which of the hole cards supply what DEFINES the hand: the
+   rank of a pair (the two ranks of a two pair, the trips and the pair of a
+   boat), or the suit of a flush, or the five ranks of a straight. A hole
+   card can sit in the best five -- a kicker -- without being any part of the
+   hand's identity, which is why `works` and `key` are counted separately:
+
+     works     hole cards in the best five at all (kickers included)
+     key       hole cards that supply the defining rank/suit
+     boardKey  board cards that supply the defining rank/suit
+
+   So key.length 2/1/0 reads "mine / shared / the table's", and works.length
+   0 means the board's five are literally the whole hand. Ask it for five or
+   more cards: before the flop there is no best five to talk about.
+   ------------------------------------------------------------------------ */
+export function readHole(hole, board) {
+  const cards = hole.concat(board);
+  if (cards.length < 5) return { score: 0, cat: CAT.HIGH, name: "", top: 0, works: [], key: [], boardKey: 0 };
+  const ev = evaluate(cards);
+  const { cat, k } = scoreParts(ev.score);
+  const best = ev.best;
+  const inBest = (c) => best.indexOf(c) >= 0;
+  const works = [];
+  for (let i = 0; i < hole.length; i++) if (inBest(hole[i])) works.push(i);
+
+  /* the ranks that define a pair-shaped hand, if this is one */
+  let ranks = null;
+  if (cat === CAT.PAIR || cat === CAT.TRIPS || cat === CAT.QUADS) ranks = [k[0]];
+  else if (cat === CAT.TWO_PAIR || cat === CAT.BOAT) ranks = [k[0], k[1]];
+
+  const key = [];
+  let boardKey = 0;
+  if (cat === CAT.FLUSH || cat === CAT.STRAIGHT_FLUSH) {
+    const suit = best[0].s;   // every card of a flush shares the suit
+    for (let i = 0; i < hole.length; i++) if (works.indexOf(i) >= 0 && hole[i].s === suit) key.push(i);
+    for (const c of board) if (inBest(c) && c.s === suit) boardKey++;
+  } else if (cat === CAT.STRAIGHT) {
+    /* all five cards of a straight define it equally, so a hole card in the
+       five is part of the run rather than a passenger */
+    for (const i of works) key.push(i);
+    for (const c of board) if (inBest(c)) boardKey++;
+  } else if (cat === CAT.HIGH) {
+    /* nothing made: the only thing worth saying about your cards is whether
+       one of them is the high card itself */
+    for (let i = 0; i < hole.length; i++) if (works.indexOf(i) >= 0 && rankVal(hole[i]) === k[0]) key.push(i);
+    for (const c of board) if (inBest(c) && rankVal(c) === k[0]) boardKey++;
+  } else if (ranks) {
+    for (let i = 0; i < hole.length; i++) if (works.indexOf(i) >= 0 && ranks.indexOf(rankVal(hole[i])) >= 0) key.push(i);
+    for (const c of board) if (inBest(c) && ranks.indexOf(rankVal(c)) >= 0) boardKey++;
+  }
+  return { score: ev.score, cat, name: scoreName(ev.score), top: k[0], works, key, boardKey };
+}
+
+/* ---------- the two draws worth naming ----------------------------------
+   Before the last card comes out, the question is not only what you hold but
+   what you are DRAWING to: four of a suit, or four ranks inside a five-rank
+   window. Either is reported only when at least one of the cards in the draw
+   is one of YOURS -- a four-flush the board dealt itself is not something you
+   did. Call it for the flop and the turn; on the river nothing is left to
+   come.
+
+   The straight scan counts DISTINCT ranks held inside each five-rank window
+   (A-2-3-4-5 is one, so the wheel turns up too) and keeps the windows that
+   are exactly one short; the missing rank (or the two of them, which is the
+   difference between an open-ender and a gutshot said in plain words) is
+   what completes it. */
+export function draws(hole, board) {
+  const out = [];
+  if (board.length < 3 || board.length >= 5) return out;
+  const seen = hole.concat(board);
+  const bySuit = [0, 0, 0, 0];
+  for (const c of seen) bySuit[c.s]++;
+  const suitHole = [0, 0, 0, 0];
+  for (const c of hole) suitHole[c.s]++;
+  for (let s = 0; s < 4; s++) if (bySuit[s] === 4 && suitHole[s] > 0) out.push({ kind: "flush", suit: s });
+
+  const have = new Set();
+  for (const c of seen) have.add(rankVal(c));
+  const mine = new Set();
+  for (const c of hole) mine.add(rankVal(c));
+  const windows = [[14, 2, 3, 4, 5]];
+  for (let lo = 2; lo <= 10; lo++) windows.push([lo, lo + 1, lo + 2, lo + 3, lo + 4]);
+  const need = new Set();
+  for (const w of windows) {
+    let held = 0, missing = 0, yours = false;
+    for (const v of w) {
+      if (have.has(v)) { held++; if (mine.has(v)) yours = true; }
+      else missing = v;
+    }
+    if (held === 4 && yours) need.add(missing);
+  }
+  if (need.size) out.push({ kind: "straight", ranks: [...need].sort((a, b) => a - b) });
+  return out;
+}
+
+/* ---------- the helper's sentence ---------------------------------------
+   `readHole` and `draws` say what the cards mean; this says it in English.
+   The chip's original complaint -- "it told me pair of sixes, how is that a
+   helping hand for me? I could not have used my cards for that" -- was a
+   matter of ATTRIBUTION: a hand's name on its own reads as yours, when the
+   pair showing may be the table's and your two may be nothing but kickers.
+   So every sentence names the hand and then says WHOSE it is -- yours,
+   yours with the board, or the board's -- and names your cards doing it.
+
+   `kind` is what colours the chip: "yours" (your cards make the hand),
+   "part" (you share it with the board, or are live drawing to it), "board"
+   (it is the table's and you have nothing in it), "wait" (no verdict to
+   give), "fold". `mine` is the hole-card indices to ring.
+   ------------------------------------------------------------------------ */
+export const SUIT_WORD = ["spades", "hearts", "diamonds", "clubs"];
+const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+
+export function readout(hole, board, folded) {
+  if (folded) return { kind: "fold", mine: [], text: "You folded \u2014 your cards are out of it.", draw: "" };
+
+  /* preflop: two cards and no board, so all there is to say is what they are */
+  if (board.length < 3) {
+    const [a, b] = hole;
+    if (a.r === b.r) {
+      return { kind: "yours", mine: [0, 1], draw: "", text: "You start with a pair of " + RP[RV[a.r]] + "." };
+    }
+    const hi = RV[a.r] >= RV[b.r] ? a : b;
+    return { kind: "wait", mine: [], draw: "",
+      text: RN[RV[hi.r]] + "-high" + (a.s === b.s ? ", both " + SUIT_WORD[a.s] : "") + " \u2014 no pair yet." };
+  }
+
+  const r = readHole(hole, board);
+  const yet = board.length < 5 ? " yet" : "";
+  const mineTxt = r.key.map((i) => cardText(hole[i]));
+  let kind, text;
+  if (!r.works.length) {
+    /* the five on the table are the whole hand: your two add nothing */
+    kind = "board";
+    text = "The board plays itself \u2014 neither of your cards is in the five.";
+  } else if (r.cat === CAT.HIGH) {
+    kind = "wait";
+    text = r.key.length
+      ? "No pair" + yet + " \u2014 your " + mineTxt[0] + " is the high card."
+      : "No pair" + yet + " \u2014 the board's " + RN[r.top] + " is high.";
+  } else if (r.cat === CAT.FLUSH || r.cat === CAT.STRAIGHT || r.cat === CAT.STRAIGHT_FLUSH) {
+    /* a flush or a straight is five cards all doing the same thing, so the
+       honest answer is which of the five are yours, not who "made" it */
+    if (r.key.length) {
+      kind = "part";
+      text = r.name + " \u2014 your " + mineTxt.join(" ") + (r.key.length > 1 ? " are" : " is") + " in it.";
+    } else {
+      kind = "board";
+      text = "The board's " + lower(r.name) + " \u2014 neither of your cards is in it.";
+    }
+  } else {
+    /* a pair-shaped hand has a rank that defines it, so say whether that rank
+       is yours, shared, or the table's */
+    const verb = r.key.length > 1 ? "make" : "makes";
+    if (r.key.length && !r.boardKey) {
+      kind = "yours";
+      text = r.name + " \u2014 your " + mineTxt.join(" ") + " " + verb + " it.";
+    } else if (r.key.length) {
+      kind = "part";
+      text = r.name + " \u2014 your " + mineTxt.join(" ") + " " + verb + " it with the board.";
+    } else {
+      kind = "board";
+      text = "The board's " + lower(r.name) + " \u2014 your cards are only kickers.";
+    }
+  }
+
+  /* what you are drawing to, while there is still a card to come */
+  let draw = "";
+  if (r.cat < CAT.STRAIGHT && board.length < 5) {
+    const ds = draws(hole, board);
+    const d = ds.find((x) => x.kind === "flush") || ds[0];
+    if (d && d.kind === "flush") {
+      draw = "Four " + SUIT_WORD[d.suit] + " \u2014 one more makes a flush.";
+    } else if (d) {
+      draw = "Four to a straight \u2014 " + d.ranks.map((v) => "a " + RN[v]).join(" or ") + " makes it.";
+    }
+    /* a live draw off a hand that is otherwise the board's is something of
+       yours after all, so it lifts the chip out of the "nothing for you" red */
+    if (draw && kind === "board") kind = "part";
+  }
+  return { kind, mine: r.key, text, draw };
+}
 
 /* ---------- equity ------------------------------------------------------ *
    Monte Carlo against `nOpp` random hands: deal the board out and then each

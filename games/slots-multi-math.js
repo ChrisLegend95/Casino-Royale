@@ -3,6 +3,21 @@ export const ROWS = 3;
 
 export const WILD_ID = "wild";
 export const SCATTER_ID = "scatter";
+/* The symbol that arms this machine's progressive (see the jackpot block in
+   src/state.js). It is a SCATTER in the same sense the wagon wheel is: it pays
+   nothing on a payline and BREAKS the line it lands on, and three or more of
+   them ANYWHERE on the fifteen cells takes the pot. It carries no luck scaling
+   either -- luck buys line pays, never pot chances.
+   
+   Its weight is the one number that decides how often the pot goes: at 1.0 of
+   a 121.6-weight drum (117.6 on the two outer drums, which carry no wild) a
+   grid lands three or more about once in 4,091 spins. The exact figures come
+   from a Poisson-binomial over the fifteen cells, not a sim -- see DEV-NOTES.
+   That weight was taken off the `star` (2.5 -> 1.5) so the reels keep their
+   total: the exact tuner prices the donation at 0.841 points of line return,
+   which is what the feature costs this machine. */
+export const JACKPOT_ID = "jackpot";
+export const JACKPOT = { id: JACKPOT_ID, sprite: "jackpot", glyph: "\u{1F3B0}", w: 1.0 };
 
 /* `glyph` is the emoji this symbol used to be drawn with, kept as the fallback
    for when the artwork cannot be loaded; `sprite` is the file in src/sprites/
@@ -17,7 +32,7 @@ export const SYMBOLS = [
   { id: "bell", sprite: "bell", glyph: "\u{1F514}", w: 14, tier: 1, pay: { 3: 28, 4: 110, 5: 420 } },
   { id: "gem", sprite: "diamond", glyph: "\u{1F48E}", w: 9, tier: 1, pay: { 3: 50, 4: 230, 5: 950 } },
   { id: "seven", sprite: "seven", glyph: "7\uFE0F\u20E3", w: 5, tier: 2, pay: { 3: 100, 4: 450, 5: 700 } },
-  { id: "star", sprite: "star", glyph: "\u2B50", w: 2.5, tier: 2, pay: { 3: 200, 4: 700, 5: 1000 } },
+  { id: "star", sprite: "star", glyph: "\u2B50", w: 1.5, tier: 2, pay: { 3: 200, 4: 700, 5: 1000 } },
 ];
 
 /* the wild wears the machine's own WILD banner; the scatter — which is what
@@ -29,6 +44,7 @@ export const SYMBOL_BY_ID = {};
 for (const s of SYMBOLS) SYMBOL_BY_ID[s.id] = s;
 SYMBOL_BY_ID[WILD_ID] = WILD;
 SYMBOL_BY_ID[SCATTER_ID] = SCATTER;
+SYMBOL_BY_ID[JACKPOT_ID] = JACKPOT;
 
 export const PAYROW = [...SYMBOLS, WILD];
 
@@ -68,6 +84,7 @@ export function reelWeights(reel, luck) {
   }
   if (CFG.wildReels.includes(reel)) out.push({ id: WILD_ID, w: WILD.w });
   out.push({ id: SCATTER_ID, w: SCATTER.w });
+  out.push({ id: JACKPOT_ID, w: JACKPOT.w });
   return out;
 }
 
@@ -93,18 +110,44 @@ export function spinGrid(rng, luck) {
   return grid;
 }
 
+/* A rigged grid may not contain a single jackpot symbol. The rig fills one live
+   payline with a paying symbol, but the rest of the grid is still a random spin
+   -- and a random spin could drop three jackpots, which would let the reward rig
+   forge the progressive with other players' money. So every jackpot cell a
+   random draw produced is replaced by another draw from the same drum. (On the
+   3-reel machine the whole grid is forced, so there the jackpot is simply kept
+   out of the cheat pool -- see slots.js.) */
+function stripJackpots(grid, rng, luck) {
+  for (let c = 0; c < REELS; c++) {
+    const table = reelWeights(c, luck).filter((it) => it.id !== JACKPOT_ID);
+    let total = 0;
+    for (const it of table) total += it.w;
+    for (let r = 0; r < ROWS; r++) {
+      if (grid[r][c] !== JACKPOT_ID) continue;
+      let x = rng() * total;
+      let pick = table[table.length - 1].id;
+      for (const it of table) { x -= it.w; if (x <= 0) { pick = it.id; break; } }
+      grid[r][c] = pick;
+    }
+  }
+  return grid;
+}
+
 /* reward rig: fill one active payline with five of the same paying symbol, so
-   the base spin always resolves to a real win while everything else stays random */
+   the base spin always resolves to a real win while everything else stays random.
+   The jackpot symbol is then stripped out of whatever the random grid produced,
+   so no cheat spin may forge the progressive. */
 export function riggedBaseGrid(rng, luck, activeLines) {
   const n = activeLines || MAX_LINES;
-  const grid = spinGrid(rng, luck);
+  const grid = stripJackpots(spinGrid(rng, luck), rng, luck);
   const li = Math.min(n - 1, Math.floor(rng() * n));
   const line = LINES[li];
+  const pool = SYMBOLS;
   let total = 0;
-  for (const s of SYMBOLS) total += s.w;
+  for (const s of pool) total += s.w;
   let r = rng() * total;
-  let sym = SYMBOLS[SYMBOLS.length - 1];
-  for (const s of SYMBOLS) { r -= s.w; if (r <= 0) { sym = s; break; } }
+  let sym = pool[pool.length - 1];
+  for (const s of pool) { r -= s.w; if (r <= 0) { sym = s; break; } }
   for (let c = 0; c < REELS; c++) grid[line[c]][c] = sym.id;
   return grid;
 }
@@ -130,7 +173,7 @@ export function evaluateGrid(grid, activeLines, luckMult) {
     const cells = [];
     for (let c = 0; c < REELS; c++) {
       const id = grid[line[c]][c];
-      if (id === SCATTER_ID) break;
+      if (id === SCATTER_ID || id === JACKPOT_ID) break;
       if (id === WILD_ID) { run++; cells.push([line[c], c]); continue; }
       if (base === null) { base = id; run++; cells.push([line[c], c]); continue; }
       if (id === base) { run++; cells.push([line[c], c]); }
@@ -150,7 +193,15 @@ export function evaluateGrid(grid, activeLines, luckMult) {
     }
   }
   const scatterPay = scatterCount >= 3 ? Math.round((SCATTER.pay[Math.min(5, scatterCount)] || 0) * lm) : 0;
-  return { wins, scatterCount, scatterCells, scatterPay };
+  /* this machine's progressive: three or more JACKPOT symbols ANYWHERE on the grid
+     (a wild does not stand in for one, and the symbol pays nothing itself -- it
+     only arms the pot), exactly as the machine's card and meter say */
+  let jackpotCount = 0;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < REELS; c++) if (grid[r][c] === JACKPOT_ID) jackpotCount++;
+  }
+  const jackpot = jackpotCount >= 3;
+  return { wins, scatterCount, scatterCells, scatterPay, jackpot, jackpotCount };
 }
 
 export function freeSpinsFor(scatterCount) {
@@ -180,6 +231,9 @@ export function resolveSpinSequence(rng, luck, activeLines, opts) {
   lineUnits += baseEv.wins.reduce((a, w) => a + w.pay, 0);
   scatterUnits += baseScatterUnits;
   spins.push({ grid: baseGrid, ev: baseEv, kind: "base" });
+  /* the progressive can be armed by the base spin or by any free spin in the
+     sequence (a free spin is still a spin on the reels) */
+  let jackpot = !!baseEv.jackpot;
   remaining = freeSpinsFor(baseEv.scatterCount);
   awarded = remaining;
 
@@ -188,6 +242,7 @@ export function resolveSpinSequence(rng, luck, activeLines, opts) {
     remaining--;
     const g = spinGrid(rng, luck + CFG.freeBoost);
     const ev = evaluateGrid(g, n, lm);
+    if (ev.jackpot) jackpot = true;
     lineUnits += ev.wins.reduce((a, w) => a + w.pay, 0);
     scatterUnits += ev.scatterPay * n;
     spins.push({ grid: g, ev, kind: "free" });
@@ -202,6 +257,7 @@ export function resolveSpinSequence(rng, luck, activeLines, opts) {
     scatterUnits,
     totalUnits,
     multiplier: totalUnits / n,
+    jackpot,
     freeAwarded: awarded,
     freePlayed: spins.length - 1,
     baseWinUnits: spinWinUnits(baseEv, n),

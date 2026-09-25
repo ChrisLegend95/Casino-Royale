@@ -21,11 +21,20 @@ import {
    summit: crossing it finishes the run.
 
    ONLY THE CARS CAN KILL YOU. The verge and every median are
-   safe ground with no clock on them: nothing reaches the frog
-   there, so it can stand on the grass for as long as it likes.
-   Traffic is the only thing that ends a run -- step into a live
-   lane and stay there and a bumper will find you. Waiting is
-   free on the grass and lethal on the road.
+   safe ground with no death clock on them: nothing reaches the
+   frog there, so it can stand on the grass without ever being
+   killed. Traffic is the only thing that ends a run -- step
+   into a live lane and stay there and a bumper will find you.
+   Waiting is lethal on the road and FREE OF DEATH on the grass
+   -- but it is not free of CHARGE. The first
+   `CONFIG.froggerPatienceSec` of a stand are on the house; past
+   that the rung the frog is holding drains by
+   `CONFIG.froggerPatienceDecay` a second, cumulatively for the
+   run (the HURRY-UP -- see the balance note in main.pjs and
+   "Frogger balance & the god harness" in DEV-NOTES.md). Without
+   it, "stand on the verge until the road opens" is a money
+   printer for any patient planner; with it, patience works, it
+   just costs the rung you were holding.
 
    The nine real lanes in each block are a TIER, and every tier
    is a step nastier than the one before it: faster traffic,
@@ -87,10 +96,11 @@ export default {
   blurb: "A frog, a 100-lane road, and one button. Ten brutal blocks of traffic -- the only thing out here that can kill you -- and a summit worth \u00D7" + multFor(100).toFixed(0) + ".",
   payoutNote: () =>
     "You start on the verge at <b>\u00D7" + C.startMult.toFixed(2) + "</b>. The road is <b>100 lanes</b> in ten blocks of ten, and " +
-    "every tenth lane (<b>10, 20, 30 \u2026 100</b>) is a <b>SAFE ISLAND</b> \u2014 no traffic, no clock, nothing can touch " +
-    "you there, so stand and read the road for as long as you like. <b>Cars are the only thing that can kill you</b>: " +
-    "step into a live lane and stay there, and a bumper will find you. <b>You can only bank on grass</b> \u2014 the verge and " +
-    "the islands: <b>\u00D7" + multFor(10).toFixed(2) + "</b> on the first island, then <b>\u00D7" + multFor(20).toFixed(2) + "</b>, <b>\u00D7" + multFor(30).toFixed(2) + "</b>, <b>\u00D7" + multFor(40).toFixed(2) + "</b>, " +
+    "every tenth lane (<b>10, 20, 30 \u2026 100</b>) is a <b>SAFE ISLAND</b> \u2014 no traffic, nothing there can touch " +
+    "you, and it is where you bank. <b>Cars are the only thing that can kill you</b>: " +
+    "step into a live lane and stay there, and a bumper will find you. Grass is safe but it is not free \u2014 the first " +
+    "<b>" + Number(CONFIG.froggerPatienceSec).toFixed(1) + "s</b> of a stand are on the house and every second after that takes <b>\u00D7" + Number(CONFIG.froggerPatienceDecay).toFixed(2) + "</b> off the " +
+    "multiplier you are holding, cumulatively for the run, so hiding on the verge is not a strategy. <b>You can only bank on grass</b> \u2014 the verge and " +    "the islands: <b>\u00D7" + multFor(10).toFixed(2) + "</b> on the first island, then <b>\u00D7" + multFor(20).toFixed(2) + "</b>, <b>\u00D7" + multFor(30).toFixed(2) + "</b>, <b>\u00D7" + multFor(40).toFixed(2) + "</b>, " +
     "<b>\u00D7" + multFor(50).toFixed(2) + "</b>, <b>\u00D7" + multFor(60).toFixed(2) + "</b>, <b>\u00D7" + multFor(70).toFixed(2) + "</b>, <b>\u00D7" + multFor(80).toFixed(2) + "</b>, <b>\u00D7" + multFor(90).toFixed(2) + "</b> \u2026 and <b>\u00D7" + multFor(C.summit).toFixed(2) + "</b> on the summit. " +
     "The step off island 10 is the wall the machine is built around: the windows shrink, the vehicles get bigger and more " +
     "varied, and the traffic jumps in speed. Traffic is irregular and you can watch it coming: if one reaches your column you're " +
@@ -172,7 +182,7 @@ export default {
 
     const root = stageShell(
       "Frogger Gamble",
-      "Cross the road one lane at a time. Only the medians pay, cars are the only thing out there that can kill you, and the grass is safe for as long as you like \u2014 so it's your call when to go.",
+      "Cross the road one lane at a time. Only the medians pay, cars are the only thing out there that can kill you, and the grass is safe to stand on \u2014 but not free: linger too long and the pit starts sagging what you're holding, so it's your call when to go.",
       { info: infoBtn(() => openInfoCard()) },
       el("div", { class: "frogger-wrap" },
         el("div", { class: "slot-cabinet frogger-cab" },
@@ -220,6 +230,7 @@ export default {
     let blockT = 0;            // seconds of safe pocket left in the lane we're standing in
     let camY = 0;
     let depth = 0;
+    let patienceCost = 0;      // cumulative seconds of loitering beyond the free grace
     let resolveRun = null;
     let outcome = null;
     let rafId = 0, lastT = 0, destroyed = false, sizeTick = 0;
@@ -261,7 +272,22 @@ export default {
     }
 
     /* ---------- hud ---------- */
-    function currentMult() { return multFor(depth); }
+    /* THE HURRY-UP. The grass stays exactly as safe as it looks -- nothing on
+       it can kill the frog -- but standing on it is no longer free. The first
+       `CONFIG.froggerPatienceSec` of a stand are on the house; every second
+       after that drains `CONFIG.froggerPatienceDecay` off the banked
+       multiplier, and the drain is CUMULATIVE for the run. This is the
+       non-fatal hurry-up the machine's own balance notes ask for: without it a
+       perfectly patient player simply waits every convoy out and the road pays
+       a planner several times the stake (the god figure in DEV-NOTES), which
+       makes the machine a money printer. With it, patience still works -- it
+       just costs you the rung you were holding, and the meter says so. */
+    const patienceSec = Math.max(0, Number(CONFIG.froggerPatienceSec) || 0);
+    const patienceDecay = Math.min(1, Math.max(0.5, Number(CONFIG.froggerPatienceDecay) || 1));
+    function onGrass() { return frog.lane === 0 || isSafeLane(frog.lane); }
+    function patienceFactor() { return patienceCost > 0 ? Math.pow(patienceDecay, patienceCost) : 1; }
+    function currentMult() { return multFor(depth) * patienceFactor(); }
+    function sagging() { return patienceCost > 0 && patienceFactor() < 0.999; }
 
     /* Which block of ten are we in, how full is each block's bar, and which
        island is next. Safe islands get their own flag so the track lights up
@@ -324,9 +350,10 @@ export default {
         dangerFill.style.width = "100%";
         dangerFill.className = "safe";
         dangerLabel.textContent = isSummit(frog.lane)
-          ? "SUMMIT \u00B7 BANK \u00D7" + multFor(C.summit).toFixed(2)
-          : (frog.lane === 0 ? "ON THE VERGE \u00B7 NOTHING CAN REACH YOU"
-            : "ISLAND " + frog.lane + " \u00B7 BANK \u00D7" + multFor(frog.lane).toFixed(2));
+          ? "SUMMIT \u00B7 BANK \u00D7" + currentMult().toFixed(2)
+          : (frog.lane === 0
+            ? "ON THE VERGE \u00B7 NOTHING CAN REACH YOU" + (sagging() ? " \u00B7 HURRY \u00B7 \u00D7" + currentMult().toFixed(2) : "")
+            : "ISLAND " + frog.lane + " \u00B7 BANK \u00D7" + currentMult().toFixed(2) + (sagging() ? " \u00B7 HURRY" : ""));
         return;
       }
 
@@ -371,6 +398,7 @@ export default {
       frog.lane = 0; frog.y = 0; frog.from = 0; frog.to = 1; frog.t = 0;
       frog.rest = 0; frog.hop = 0; frog.arc = 0; frog.state = "rest"; frog.squash = 0; frog.deadLane = 0;
       depth = 0; camY = 0; floaters = []; banner = null; shake = 0; queued = null; blockT = 0;
+      patienceCost = 0;
       atmo = { night: 0, rain: 0 };
     }
 
@@ -380,6 +408,7 @@ export default {
       frog.lane = 0; frog.y = 0; frog.from = 0; frog.to = 0; frog.t = 0;
       frog.state = "rest"; frog.rest = C.settleSec; frog.hop = 0; frog.arc = 0;
       depth = 0; camY = 0; queued = null; blockT = 0;
+      patienceCost = 0;
       phase = "run";
       crossBtn.disabled = false;
       hideDeathCard();
@@ -401,17 +430,17 @@ export default {
           // Standing grass is the only place the rung moves, so this is the
           // moment worth shouting about: float the multiplier and say what
           // banking here is worth. Nothing on the grass can end the run.
-          float(multText(multFor(depth)), frog.y + 0.35, "good");
+          float(multText(currentMult()), frog.y + 0.35, "good");
           sfx.win(1);
-          showBanner(isSummit(depth) ? "SUMMIT \u2014 \u00D7" + multFor(depth).toFixed(2) : "ISLAND " + depth, "good", 1.6);
+          showBanner(isSummit(depth) ? "SUMMIT \u2014 \u00D7" + currentMult().toFixed(2) : "ISLAND " + depth, "good", 1.6);
           statusEl.className = "frogger-status won";
           statusEl.textContent = isSummit(depth)
             ? "THE SUMMIT \u2014 all " + C.summit + " lanes"
-            : "SAFE ISLAND " + depth + " \u00B7 BANK " + multText(multFor(depth)) + " OR PUSH ON \u00B7 NOTHING CAN REACH YOU HERE \u00B7 " +
+            : "SAFE ISLAND " + depth + " \u00B7 BANK " + multText(currentMult()) + " OR PUSH ON \u00B7 NOTHING CAN REACH YOU HERE \u00B7 " +
               TIERS[Math.min(TIERS.length - 1, tierOf(depth + 1))].name + " AHEAD";
         } else {
           statusEl.className = "frogger-status";
-          statusEl.textContent = "LANE " + depth + " OF " + C.summit + " \u2014 HOLDING " + multText(multFor(depth)) +
+          statusEl.textContent = "LANE " + depth + " OF " + C.summit + " \u2014 HOLDING " + multText(currentMult()) +
             " \u00B7 banking is only on the grass (island " + nextIsland(depth + 1) + ")";
           const prev = lanes[frog.lane - 1];
           if (prev && frog.lane > 1 && timeWithin(prev, 0.4) && Math.random() < 0.5) sfx.horn();
@@ -489,7 +518,7 @@ export default {
       deathSub.innerHTML = "FLATTENED ON LANE <b>" + lane + "</b> OF " + C.summit;
       clear(deathGrid);
       deathGrid.appendChild(deathCell("Lanes crossed", depth + " / " + C.summit));
-      deathGrid.appendChild(deathCell("Was holding", depth > 0 ? multText(multFor(depth)) : "\u00D7" + C.startMult.toFixed(2), "gold"));
+      deathGrid.appendChild(deathCell("Was holding", depth > 0 ? multText(currentMult()) : "\u00D7" + C.startMult.toFixed(2), "gold"));
       deathGrid.appendChild(deathCell("Stake lost", app.fmt(lastStake), "bad"));
       deathGrid.appendChild(deathCell("Best ever banked", multText(state.frogger.bestMult || C.startMult)));
       deathFlavor.textContent = SPLAT_LINES[Math.floor(Math.random() * SPLAT_LINES.length)];
@@ -517,7 +546,7 @@ export default {
       const dead = kind === "splat";
       if (!dead) {
         const best = state.frogger;
-        const m = multFor(depth);
+        const m = mult;
         if (depth > (best.bestDepth || 0) || m > (best.bestMult || 0)) {
           best.bestDepth = Math.max(best.bestDepth || 0, depth);
           best.bestMult = Math.max(best.bestMult || 0, m);
@@ -594,11 +623,15 @@ export default {
           if (phase !== "run") return;
         }
       } else if (frog.state === "rest") {
-        // `rest` still counts the seconds since the landing -- CROSS is gated
-        // on it (the settle dead-time before the next hop is allowed) -- but
-        // nothing else reads it: the grass is safe indefinitely, so standing
-        // still on the verge or a median can no longer end the run.
+        // `rest` counts the seconds since the landing -- CROSS is gated on it
+        // (the settle dead-time before the next hop is allowed) -- and on grass
+        // it is also the loiter clock the hurry-up reads: the first
+        // `patienceSec` of a stand are free, and every second past that is
+        // added to `patienceCost`, which drains the banked multiplier. Standing
+        // still still cannot end the run; it just stops paying.
+        const before = Math.max(0, frog.rest - patienceSec);
         frog.rest += dt;
+        if (onGrass()) patienceCost += Math.max(0, frog.rest - patienceSec) - before;
       }
 
       camY += (frog.y - camY) * Math.min(1, dt * 9);
@@ -1342,6 +1375,11 @@ export default {
         } else if (phase === "run") {
           if (fade < 1) fade = Math.min(1, fade + dt / FADE_SEC);
           update(dt);
+          /* every frame, because the HURRY-UP moves the banked multiplier while
+             the frog just stands there -- without this the "Bank now" cell kept
+             printing the value the frog landed with, so a player who loitered on
+             the verge saw the sag in the danger bar but not in the money. */
+          refreshHud();
           refreshDanger();
         } else if (phase === "done") {
           updateFx(dt);
@@ -1501,7 +1539,9 @@ export default {
         kvRow("Island 20", "\u00D7" + multFor(20).toFixed(2)),
         kvRow("Island 50", "\u00D7" + multFor(50).toFixed(2)),
         kvRow("The summit", "\u00D7" + multFor(C.summit).toFixed(2)),
-        kvRow("Grass (verge and medians)", "no traffic \u00B7 no clock"),
+        kvRow("Grass (verge and medians)", "no traffic \u00B7 never fatal"),
+        kvRow("Free loitering per stand", patienceSec.toFixed(1) + "s"),
+        kvRow("Payout decay after that", "\u00D7" + patienceDecay.toFixed(2) + " per second, cumulative"),
         kvRow("Lane 1 safe pocket", blockSecFor(1).toFixed(2) + "s"),
         kvRow("Summit safe pocket", blockSecFor(C.summit).toFixed(2) + "s")
       );
@@ -1521,7 +1561,7 @@ export default {
             ul([
               "The road is <b>" + C.summit + " lanes</b>, in ten blocks of ten.",
               "Every tenth lane \u2014 <b>10, 20, 30 \u2026 90</b> \u2014 is a <b>SAFE ISLAND</b>: grass, scenery, no traffic, and nothing can touch you there.",
-              "<b>ONLY THE CARS CAN KILL YOU.</b> The verge and every median are safe ground: no traffic runs there and nothing is on a clock, so you can stand and read the road for as long as you like. Step into a live lane and stay there, and a bumper will find you.",
+              "<b>ONLY THE CARS CAN KILL YOU.</b> The verge and every median are safe ground: no traffic runs there and nothing on them can end your run. But they are not <i>free</i>: stand on grass for more than <b>" + patienceSec.toFixed(1) + "s</b> and the multiplier you are holding starts to sag (see <b>The hurry-up</b>). Reading the road is cheap; hiding on it is not. Step into a live lane and stay there, and a bumper will find you.",
               "<b>Lane 100 is the SUMMIT</b>: cross into it and the run ends on its own for <b>\u00D7" + multFor(C.summit).toFixed(2) + "</b>.",
             ])
           ),
@@ -1536,21 +1576,28 @@ export default {
           sec("Payout",
             ul([
               "One rung per island: <b>\u00D7" + multFor(10).toFixed(2) + "</b> at island 10, <b>\u00D7" + multFor(20).toFixed(2) + "</b> at 20, <b>\u00D7" + multFor(30).toFixed(2) + "</b> at 30, <b>\u00D7" + multFor(40).toFixed(2) + "</b> at 40, <b>\u00D7" + multFor(50).toFixed(2) + "</b> at 50, then <b>\u00D7" + multFor(60).toFixed(2) + "</b>, <b>\u00D7" + multFor(70).toFixed(2) + "</b>, <b>\u00D7" + multFor(80).toFixed(2) + "</b>, <b>\u00D7" + multFor(90).toFixed(2) + "</b> and <b>\u00D7" + multFor(C.summit).toFixed(2) + "</b> on the summit.",
-              "The rungs are set from how often the road actually lets a player reach each island, so the deep rungs are paid for by the runs that never get there. Waiting is free on the grass, but the ladder never grows for waiting \u2014 the only way to be paid more is to be further up the road.",
+              "Waiting cannot kill you and the ladder never grows for it \u2014 and past a few seconds it starts to <i>shrink</i>, because standing still sags what you are holding (see <b>The hurry-up</b>). The only way to be paid more is to be further up the road.",
+            ])
+          ),
+          sec("The hurry-up",
+            ul([
+              "Grass is <b>safe, not free</b>. The first <b>" + patienceSec.toFixed(1) + "s</b> you spend standing on any grass \u2014 the verge or any median \u2014 are on the house; every second after that takes <b>\u00D7" + patienceDecay.toFixed(2) + "</b> off the multiplier you are currently holding.",
+              "The drain is <b>cumulative for the run</b>: it does not reset when you cross another road or reach another island, so a frog that waits every convoy out finishes the run banking a fraction of the rung it actually reached. The HUD prints <b>HURRY</b> while it is costing you.",
+              "It is a hurry-up, never a death sentence: the multiplier falls towards zero but never reaches it, and no clock can end the run. Patience is still a legitimate play \u2014 it just has to be paid for, and the meter tells you the price.",
             ])
           ),
           sec("Safe pockets",
             ul([
               "Land in a gap and the road <b>blocks that lane behind you</b> \u2014 traffic holds still for a moment.",
               "That pocket is <b>" + blockSecFor(1).toFixed(2) + "s</b> on the first lane and only <b>" + blockSecFor(C.summit).toFixed(2) + "s</b> near the summit \u2014 it shrinks with every lane and every island you cross, so a live lane never stays clear for long.",
-              "Medians are not pockets, they are <b>safe ground</b>: no traffic runs through one, so you can stand there for as long as you like and read the block ahead. They are also the only place you can bank.",
+              "Medians are not pockets, they are <b>safe ground</b>: no traffic runs through one, so nothing there can kill you \u2014 though loitering on one still sags the multiplier (see <b>The hurry-up</b>), so read the block and move. They are also the only place you can bank.",
               "The column ahead is lit green/red by whether it is open long enough for a hop, so you can read the whole decision off the screen.",
             ])
           ),
           sec("Getting flattened",
             ul([
               "If a car reaches your column while you are hopping, the frog is flattened and the <b>whole stake is lost</b>.",
-              "Standing still on the grass is free; standing still on the road is not. Once the landing pocket lapses the lane flows again, and a car will find a frog that never moved.",
+              "Standing still on the road is fatal; standing still on the grass is not \u2014 it just sags what you are holding (see <b>The hurry-up</b>). Once the landing pocket lapses the lane flows again, and a car will find a frog that never moved.",
               "Banking is the only guaranteed exit \u2014 the deeper you go, the more you are risking.",
             ])
           )
@@ -1560,7 +1607,7 @@ export default {
       openInfo("Frogger Gamble \u2014 How to Win", el("div", { class: "ic" },
         top,
         sec("The ten tiers", tiers,
-          note("Each island is a true rest stop: no traffic reaches you there and no clock is running, and it is the only ground you can bank from.")),
+          note("Each island is a true rest stop: no traffic reaches you there and nothing there is on a clock \u2014 but loitering is never free (see THE HURRY-UP).")),
         sec("Your payout", kv,
           note("Your <b>banked multiplier</b> is paid on your stake \u2014 a <b>\u00D7" + multFor(70).toFixed(0) + "</b> bank on a $10 bet returns <b>$" + (10 * multFor(70)).toFixed(0) + "</b>. The HUD keeps your best bank so far."))
       ));

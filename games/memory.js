@@ -56,13 +56,23 @@ import { sfx } from "../audio.js";
    cannot flash any faster.
    ========================================================= */
 
+/* The four pads. `key` is what the pad is LABELLED with (the tooltip and the
+   info card's legend), `codes` is what actually plays it: the wheel is a compass,
+   so green sits at the top, red on the right, gold at the bottom and blue on the
+   left (see `midAngle` below) -- which means the arrow keys point at exactly the
+   pad the player is looking at, and WASD falls on the same four directions. The
+   old number-row keys are gone (the player asked for this): 1..4 named the pads
+   in reading order, which on a wheel says nothing about where they are. */
 const PADS = [
-  { color: "#37d67a", dim: "#123a26", hov: "#1f7a48", glyph: "\u25B2", name: "green", key: "1" },
-  { color: "#ff5f6d", dim: "#3d1319", hov: "#8f2a34", glyph: "\u25C6", name: "red", key: "2" },
-  { color: "#f2c14e", dim: "#3a2d0c", hov: "#8a6a1f", glyph: "\u25CF", name: "gold", key: "3" },
-  { color: "#4aa8ff", dim: "#122a44", hov: "#245f99", glyph: "\u25A0", name: "blue", key: "4" },
+  { color: "#37d67a", dim: "#123a26", hov: "#1f7a48", glyph: "\u25B2", name: "green", key: "W / \u2191", codes: ["w", "arrowup"] },
+  { color: "#ff5f6d", dim: "#3d1319", hov: "#8f2a34", glyph: "\u25C6", name: "red", key: "D / \u2192", codes: ["d", "arrowright"] },
+  { color: "#f2c14e", dim: "#3a2d0c", hov: "#8a6a1f", glyph: "\u25CF", name: "gold", key: "S / \u2193", codes: ["s", "arrowdown"] },
+  { color: "#4aa8ff", dim: "#122a44", hov: "#245f99", glyph: "\u25A0", name: "blue", key: "A / \u2190", codes: ["a", "arrowleft"] },
 ];
 const N = PADS.length;
+/* one lookup for the key handler: lower-cased `e.key` -> pad index */
+const PAD_BY_KEY = {};
+PADS.forEach((p, i) => { p.codes.forEach((c) => { PAD_BY_KEY[c] = i; }); });
 
 /* Opening length: memStartLen colours (three). Resolved here, once, so the payout
    note, the info card and the engine cannot disagree. `levels` is how many
@@ -622,14 +632,22 @@ export default {
       const tag = (e.target && e.target.tagName) || "";
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.repeat) return;
-      const k = e.key;
-      if (k >= "1" && k <= "4") {
-        if (phase !== "input") return;
+      /* `e.key` for the arrows is `ArrowUp` & co., so lower-case the whole thing
+         (letters must fold too: a shifted `W` is `"W"`, and Caps Lock makes every
+         letter upper) before the lookup -- the table is all lower-case. */
+      const lower = String(e.key || "").toLowerCase();
+      /* arrows and WASD, one pad each (see PADS): the wheel is laid out like a
+         compass, so `W`/`\u2191` is the top pad and so on. The arrows are CLAIMED
+         for as long as this cabinet is mounted -- preventDefault stops them
+         scrolling the page out from under a flashing pattern -- but they only
+         PLAY during the input phase. */
+      const pad = PAD_BY_KEY[lower];
+      if (pad !== undefined) {
         e.preventDefault();
-        padPress(Number(k) - 1);
+        if (phase === "input") padPress(pad);
         return;
       }
-      if (k === "c" || k === "C") {
+      if (lower === "c") {
         if (phase !== "choose") return;
         e.preventDefault();
         choose("cash");
@@ -694,7 +712,7 @@ export default {
           sec("How you play",
             ul([
               "Press <b>START RECALL</b> to pay your stake. The machine flashes a sequence of <b>" + startLen + " colours</b>.",
-              "Repeat it by tapping the pads (keys <b>1\u20134</b> also work). The pattern keeps its order and grows by one colour every pass, so all you carry into the next pass is the new colour on the end.",
+              "Repeat it by tapping the pads \u2014 the <b>arrow keys</b> or <b>WASD</b> play the same four pads, since the wheel is laid out like a compass (green up, red right, gold down, blue left). The pattern keeps its order and grows by one colour every pass, so all you carry into the next pass is the new colour on the end.",
               "Clear a pass and you choose: <b>CASH OUT</b> to keep your bank, or <b>NEXT PASS</b> to add one more colour to the pattern \u2014 which also makes it flash faster.",
               "Miss a single pad and the run ends \u2014 the stake and every unbanked multiplier are gone. Banked money is never at risk after you take it.",
             ])

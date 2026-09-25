@@ -121,6 +121,9 @@ export default {
   create(app) {
     /* ---------- table state ---------- */
     let nBots = clampBots(state.holdem.bots);
+    /* the helper chip is a coaching aid, not part of the game, so it ships OFF
+       and stays wherever the player left it (see the HELP toggle in the head) */
+    let helperOn = state.holdem.helper === true;
     let botStyles = [];
     let hand = null;
     let busy = false;
@@ -172,6 +175,9 @@ export default {
     const tagEl = el("div", { class: "bj-tag" });
     const tableEl = el("div", { class: "ht-table" },
       el("div", { class: "ht-felt-glow" }),
+      /* the house monogram inlaid into the felt — fills the middle of the table the way
+         a real card room does (absolutely positioned, so it isn't a grid item) */
+      el("div", { class: "ht-mark", text: "THE HOUSE" }),
       centerEl, flashEl, burstEl, tagEl);
 
     /* ---------- the controls ---------- */
@@ -213,23 +219,33 @@ export default {
         const hero = i === nBots;
         const name = hero ? "You" : BOT_NAMES[i % BOT_NAMES.length];
         const cardsEl = el("div", { class: "ht-cards" });
+        /* the hand helper (hero only): what do your own two cards actually give
+           you here? Its contents, colour and rings are set in paintHelper(). */
+        const helperEl = hero ? el("div", { class: "ht-helper", hidden: true }) : null;
         const nameEl = el("span", { class: "ht-name", text: name });
         const styleEl = el("span", { class: "ht-style", text: hero ? "" : botStyles[i].label });
-        const dbtnEl = el("span", { class: "ht-dbtn", text: "D", hidden: true });
+        /* the button / blind marker: one badge that says where the seat sits in the
+           order (the dealer button is worth a letter on a plate, and so are the blinds) */
+        const posEl = el("span", { class: "ht-pos", text: "", hidden: true });
         const stackEl = el("span", { class: "ht-stack", text: chips(0) });
         const badgeEl = el("span", { class: "ht-badge", text: "" });
+        const avEl = el("span", { class: "ht-av", text: hero ? "\u2605" : (name[0] || "?").toUpperCase() });
         const plateEl = el("div", { class: "ht-plate" },
-          el("span", { class: "ht-id" }, nameEl, stackEl, dbtnEl),
-          styleEl,
-          badgeEl
+          avEl,
+          el("div", { class: "ht-pinfo" },
+            el("div", { class: "ht-id" }, nameEl, posEl),
+            styleEl,
+            badgeEl
+          ),
+          stackEl
         );
         const chipsEl = el("div", { class: "ht-bet" });
         const seatEl = el("div", { class: "ht-seat ht-" + pos[i] + (hero ? " human" : "") },
-          cardsEl, plateEl, chipsEl);
+          cardsEl, helperEl, plateEl, chipsEl);
         /* `shown` is how many of the seat's two cards the animation has dealt
            out yet: the engine hands both over at once, so the picture is paced
            by this counter rather than by the model */
-        views.push({ i, el: seatEl, cardsEl, cardNodes: [], shown: 0, stackEl, styleEl, badgeEl, chipsEl, plateEl, dbtnEl, revealed: false });
+        views.push({ i, el: seatEl, cardsEl, cardNodes: [], shown: 0, stackEl, styleEl, badgeEl, chipsEl, plateEl, posEl, revealed: false, helperEl, helperSig: "" });
         tableEl.appendChild(seatEl);
       }
       paintHead();
@@ -242,11 +258,22 @@ export default {
       const d = Math.min(1, (eff.luck || 0) / Math.max(1e-9, CONFIG.luckCap)) * CONFIG.holdemLuckFee;
       const charge = R2(stake * CONFIG.holdemFee);
       const mine = R2(charge * (1 - d));
+      /* one labelled pill per number, so the house rules read as a stat strip
+         instead of a single run-on sentence */
       headEl.appendChild(el("div", { class: "ht-facts" },
-        el("span", { html: "buy-in <b>" + chips(stake) + "</b>" }),
-        el("span", { html: "seat charge <b>" + chips(charge) + "</b>" + (d >= 0.05 ? " <i>(yours " + chips(mine) + " \u2014 luck)</i>" : "") }),
-        el("span", { html: "blinds <b>" + chips(sbFor(stake) / 2) + "/" + chips(sbFor(stake)) + "</b>" }),
-        el("span", { html: "best <b>\u00D7" + (state.holdem.bestMult || 1).toFixed(2) + "</b>" })
+        el("span", { class: "ht-fact" },
+          el("i", { class: "ht-fact-k", text: "buy-in" }),
+          el("b", { class: "ht-fact-v", text: chips(stake) })),
+        el("span", { class: "ht-fact" },
+          el("i", { class: "ht-fact-k", text: "seat charge" }),
+          el("b", { class: "ht-fact-v", text: chips(charge) }),
+          d >= 0.05 ? el("em", { class: "ht-fact-luck", text: "yours " + chips(mine) }) : null),
+        el("span", { class: "ht-fact" },
+          el("i", { class: "ht-fact-k", text: "blinds" }),
+          el("b", { class: "ht-fact-v", text: chips(sbFor(stake) / 2) + " / " + chips(sbFor(stake)) })),
+        el("span", { class: "ht-fact" },
+          el("i", { class: "ht-fact-k", text: "best" }),
+          el("b", { class: "ht-fact-v", text: "\u00D7" + (state.holdem.bestMult || 1).toFixed(2) }))
       ));
       clear(segEl);
       for (let n = 1; n <= 3; n++) {
@@ -258,6 +285,30 @@ export default {
       }
       headEl.appendChild(el("div", { class: "ht-segwrap" },
         el("span", { class: "ht-seglabel", text: "OPPONENTS" }), segEl));
+      /* the hand-reader is a teaching aid, so it is not on the table by
+         default: one switch, and it reads ON/OFF at a glance */
+      headEl.appendChild(el("div", { class: "ht-segwrap" },
+        el("span", { class: "ht-seglabel", text: "HELP" }),
+        el("div", { class: "ht-seg" },
+          el("button", {
+            class: "ht-segbtn ht-helpbtn" + (helperOn ? " on" : ""), type: "button",
+            text: helperOn ? "ON" : "OFF",
+            title: helperOn ? "Hide the read-out under your cards" : "Show a read-out of your hand under your cards",
+            onclick: () => setHelper(!helperOn),
+          }))));
+    }
+
+    /* switching the helper mid-hand is the whole point of the switch, so it is
+       never disabled while the table is busy: the chip repaints on the spot */
+    function setHelper(on) {
+      on = !!on;
+      if (on === helperOn) return on;
+      helperOn = on;
+      state.holdem.helper = on;
+      saveState();
+      paintHead();
+      paintHelper();
+      return on;
     }
 
     function setBots(n) {
@@ -313,7 +364,14 @@ export default {
         if (!s) continue;
         v.stackEl.textContent = chips(s.stack);
         v.styleEl.hidden = !(v.i !== heroSeat && botStyles[v.i]);
-        v.dbtnEl.hidden = hand.button !== v.i;
+        /* the seat order: the button, then the small blind, then the big blind */
+        const nSeats = hand.seats.length;
+        const isBtn = hand.button === v.i;
+        const isSb = (hand.button + 1) % nSeats === v.i;
+        const isBb = (hand.button + 2) % nSeats === v.i;
+        v.posEl.hidden = !(isBtn || isSb || isBb);
+        v.posEl.className = "ht-pos " + (isBtn ? "btn" : isSb ? "sb" : "bb");
+        v.posEl.textContent = isBtn ? "BTN" : isSb ? "SB" : "BB";
         v.el.classList.toggle("turn", turn === v.i && !v.revealed);
         v.el.classList.toggle("folded", !!s.folded);
         v.el.classList.toggle("allin", !!s.allIn);
@@ -336,7 +394,87 @@ export default {
         const c = hand.board[k];
         if (c && !slots[k].firstChild) slots[k].appendChild(makeCard(c, false));
       }
+      paintHelper();
       paintRaise();
+    }
+
+    /* ---------- the hand helper ----------
+       "What do I actually have?" is the question a new hold'em player gets
+       wrong, because the board is shared: your hand is the best FIVE of the
+       seven cards you can see, so the pair on the table may be *the table's*
+       and your own two may be nothing but kickers. Naming the hand on its own
+       ("pair of sixes") is worse than useless there -- it reads as YOUR pair,
+       which is exactly the complaint this version answers. So the chip, under
+       the hero's cards, answers in two halves:
+
+         * the two cards you were dealt, echoed here so the sentence is
+           unmistakably about them, cyan when they are what makes the hand;
+         * one sentence naming the hand AND whose it is -- yours, yours with
+           the board, or the board's alone -- and, while there are still cards
+           to come, what you are drawing to.
+
+       Every word of the second half comes from `M.readout` (which sits on
+       `M.readHole`/`M.draws`), so the poker reading and its English live in
+       the pure module where they can be exercised card by card; this file
+       only draws the answer. It speaks from the flop onwards, because before
+       the flop there is no board to judge against and your two cards are
+       literally all you have. At the showdown the gold crowns take over,
+       marking the five that actually won the pot, so cyan rings stop there.
+
+       The rings mark the cards that MAKE the hand, not every card that merely
+       sits in the five: a king kickering along behind the board's pair of
+       sixes is in the five and does nothing, and ringing it was exactly the
+       lie this version exists to stop telling. */
+    function helperState() {
+      if (!hand) return null;
+      const s = hand.seats[heroSeat];
+      if (!s || s.hole.length < 2) return null;
+      const r = M.readout(s.hole, hand.board, s.folded);
+      return { kind: r.kind, mine: r.mine, text: r.text, draw: r.draw,
+        holes: s.hole.map((c) => ({ txt: M.cardText(c), red: M.SUIT_RED[c.s] })) };
+    }
+
+    /* the chip is rebuilt only when its reading changes: paint() runs on every
+       state change, and re-setting identical children would restart the pop
+       animation for nothing */
+    function paintHelper() {
+      const v = views[heroSeat];
+      if (!v || !v.helperEl) return;
+      /* off (the default) means the chip and its cyan rings leave the table
+         entirely -- no half-on state where the rings still give the game away */
+      const st = helperOn ? helperState() : null;
+      if (!st) {
+        /* re-setting the signature to empty means the next reading rebuilds,
+           so a chip switched off leaves nothing stale in the DOM either */
+        if (v.helperSig) { v.helperSig = ""; clear(v.helperEl); }
+        v.helperEl.hidden = true;
+      } else {
+        v.helperEl.hidden = false;
+        const sig = st.kind + "|" + st.text + "|" + st.draw + "|" + st.mine.join(",");
+        if (sig !== v.helperSig) {
+          v.helperSig = sig;
+          v.helperEl.className = "ht-helper " + st.kind;
+          clear(v.helperEl);
+          const handEl = el("span", { class: "ht-helper-cards" });
+          for (let k = 0; k < st.holes.length; k++) {
+            const c = st.holes[k];
+            handEl.appendChild(el("span", {
+              class: "ht-helper-hc" + (c.red ? " red" : "") + (st.mine.indexOf(k) >= 0 ? " on" : ""),
+              text: c.txt,
+            }));
+          }
+          v.helperEl.appendChild(handEl);
+          v.helperEl.appendChild(el("span", { class: "ht-helper-say", text: st.text }));
+          if (st.draw) v.helperEl.appendChild(el("span", { class: "ht-helper-draw", text: st.draw }));
+        }
+      }
+      /* ring the cards that make the hand, but only while it is live -- once
+         it is over the gold crown is the mark that matters, and with the
+         helper off the ring goes off with it, because the ring IS its verdict */
+      const ring = (!hand.done && st && st.mine) || [];
+      for (let k = 0; k < v.cardNodes.length; k++) {
+        v.cardNodes[k].classList.toggle("works", ring.indexOf(k) >= 0);
+      }
     }
 
     function resetTable() {
@@ -350,7 +488,11 @@ export default {
         v.chipsEl.classList.remove("on");
         v.badgeEl.className = "ht-badge";
         v.badgeEl.textContent = "";
+        v.posEl.className = "ht-pos";
+        v.posEl.textContent = "";
+        v.posEl.hidden = true;
         v.stackEl.textContent = chips(0);
+        if (v.helperEl) { v.helperEl.hidden = true; v.helperEl.className = "ht-helper"; v.helperSig = ""; clear(v.helperEl); }
         v.el.classList.remove("turn", "folded", "allin", "win", "lose", "showdown");
       }
       for (const s of slots) clear(s);
@@ -772,7 +914,7 @@ export default {
             sec("One hand, start to finish",
               ul([
                 "Every seat is dealt <b>two cards face down</b>, then five shared cards come out in three stages: the <b>flop</b> (3), the <b>turn</b> (1) and the <b>river</b> (1).",
-                "Your best hand is the best <b>five</b> cards you can make from your two and the five on the table \u2014 you don't have to use your own cards at all.",
+                "Your best hand is the best <b>five</b> cards you can make from your two and the five on the table \u2014 you don't have to use your own cards at all, so a pair showing on the table is not automatically yours. The line under your cards reads that back while you play: your two cards, then what you hold and <b>whose</b> it is \u2014 yours, yours with the board, or the board's alone \u2014 plus what you are drawing to (four to a flush, four to a straight) while cards are still to come. The cards of yours that make the hand are ringed in blue. It is a teaching aid, not a rule, so it ships <b>off</b> \u2014 the <b>HELP</b> switch above the table turns it on and off whenever you like.",
                 "There are four rounds of betting: before the flop and after each stage. Everyone still in at the end turns their cards over, and the best hand takes the pot.",
               ])
             ),

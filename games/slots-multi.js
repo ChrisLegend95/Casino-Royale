@@ -4,10 +4,14 @@ import { stageShell, round2, SPIN_EASE_CSS, spinBlur, BLUR_TICK,
 import { infoBtn, openInfo } from "./infocard.js";
 import { sfx } from "../audio.js";
 import {
-  REELS, ROWS, LINES, MAX_LINES, SCATTER, PAYROW, SYMBOL_BY_ID,
-  resolveSpinSequence, spinWinUnits, freeSpinsFor,
+  REELS, ROWS, LINES, MAX_LINES, SCATTER, JACKPOT, JACKPOT_ID, PAYROW, SYMBOL_BY_ID,
+  resolveSpinSequence, spinWinUnits, freeSpinsFor, reelWeights,
 } from "./slots-multi-math.js";
 import { spriteEl, spriteHtml, preloadSprites } from "../sprites.js";
+import { createLedBoard } from "./ledboard.js";
+import { jackpotPot, jackpotBankView } from "../state.js";
+
+const GAME_ID = "slots-multi";
 
 /* Every symbol carries artwork in src/sprites/ (sprites/README.md) alongside the
    emoji `glyph` it used to be drawn with. The glyph is now the FALLBACK: if an
@@ -50,7 +54,7 @@ function lineShape(li) {
 }
 
 export default {
-  id: "slots-multi",
+  id: GAME_ID,
   name: "Fortune Lines",
   icon: "\u{1F340}",
   action: "SPIN",
@@ -59,41 +63,56 @@ export default {
     "Land <b>3, 4 or 5</b> matching symbols from the left edge of any of your paylines. " +
     spriteHtml("wild") + " is <b>wild</b>, and pays on its own line too. " +
     spriteHtml("bonus") + " pays <b>\u00D7 total bet</b> anywhere, and <b>3 or more</b> launch up to <b>20 free spins</b>. " +
-    "All pays above are <b>per line bet</b>. Base return <b>~93%</b>; the biggest line pays <b>1000\u00D7</b>.",
+    "All pays above are <b>per line bet</b>. Base return <b>~94%</b>; the biggest line pays <b>1000\u00D7</b>.",
   minBet: 1,
 
   create(app) {
     let lines = MAX_LINES;
     let fastUntil = 0;
 
+    /* The pit meter -- see src/games/ledboard.js. On this board the side
+       panel's amount is per line, so the TOTAL pod is the real cost of a spin:
+       per-line bet x live lines. The JACKPOT pod is THIS CABINET'S progressive
+       (see src/state.js): Fortune Lines feeds its own bank on a losing spin,
+       and only three jackpot signs on these fifteen cells can take it. Lucky
+       Sevens and Wheelhouse keep banks of their own. */
+    const board = createLedBoard([
+      { label: "LINES", digits: 2, read: () => lines },
+      { label: "TOTAL", digits: 6, read: () => Math.round(app.bet * lines), caption: "PER SPIN" },
+      { label: "JACKPOT", digits: 7, read: () => jackpotPot(GAME_ID), jackpot: true, caption: "3 JACKPOTS ANYWHERE" },
+    ]);
+
     const root = stageShell(
       "Fortune Lines",
       "Nine paylines across five drums. Pays are per line bet \u2014 total cost is your bet \u00D7 lines.",
       { info: infoBtn(() => openPayTable(), "PAY TABLE") },
       el("div", { class: "mline-wrap" },
-        el("div", { class: "slot-cabinet mline-cab" },
-          el("div", { class: "slot-marquee" },
-            el("span", { class: "lights" }, ...[0, 1, 2].map(() => el("i"))),
-            el("span", { class: "marquee-title", text: "FORTUNE LINES" }),
-            el("span", { class: "sub", id: "mlSubEl", text: "9 PAYLINES" }),
-            el("span", { class: "lights" }, ...[0, 1, 2].map(() => el("i")))
-          ),
-          el("div", { class: "ml-lines" },
-            el("span", { class: "ml-lines-label", text: "PAYLINES" }),
-            ...LINE_OPTIONS.map((n) =>
-              el("button", { class: "segbtn ml-linebtn" + (n === MAX_LINES ? " on" : ""), type: "button",
-                "data-lines": n, text: String(n), onclick: () => setLines(n) })
+        el("div", { class: "cab-row" },
+          el("div", { class: "slot-cabinet mline-cab" },
+            el("div", { class: "slot-marquee" },
+              el("span", { class: "lights" }, ...[0, 1, 2].map(() => el("i"))),
+              el("span", { class: "marquee-title", text: "FORTUNE LINES" }),
+              el("span", { class: "sub", id: "mlSubEl", text: "9 PAYLINES" }),
+              el("span", { class: "lights" }, ...[0, 1, 2].map(() => el("i")))
             ),
-            el("span", { class: "ml-free-badge", id: "mlBadgeEl", hidden: true, text: "" })
-          ),
-          el("div", { class: "reels mlreels", id: "mlReelsEl" },
-            ...[0, 1, 2, 3, 4].map(() =>
-              el("div", { class: "mlreel" }, el("div", { class: "reel-strip mlstrip" }))
+            el("div", { class: "ml-lines" },
+              el("span", { class: "ml-lines-label", text: "PAYLINES" }),
+              ...LINE_OPTIONS.map((n) =>
+                el("button", { class: "segbtn ml-linebtn" + (n === MAX_LINES ? " on" : ""), type: "button",
+                  "data-lines": n, text: String(n), onclick: () => setLines(n) })
+              ),
+              el("span", { class: "ml-free-badge", id: "mlBadgeEl", hidden: true, text: "" })
             ),
-            el("div", { class: "ml-free", id: "mlFreeEl", hidden: true, text: "" })
+            el("div", { class: "reels mlreels", id: "mlReelsEl" },
+              ...[0, 1, 2, 3, 4].map(() =>
+                el("div", { class: "mlreel" }, el("div", { class: "reel-strip mlstrip" }))
+              ),
+              el("div", { class: "ml-free", id: "mlFreeEl", hidden: true, text: "" })
+            ),
+            el("div", { class: "slot-result ml-result", id: "mlResultEl", text: "Place your bet and pull the lever" }),
+            el("div", { class: "ml-detail", id: "mlDetailEl", text: "" })
           ),
-          el("div", { class: "slot-result ml-result", id: "mlResultEl", text: "Place your bet and pull the lever" }),
-          el("div", { class: "ml-detail", id: "mlDetailEl", text: "" })
+          board.node
         ),
         el("div", { class: "slot-paywrap" },
           el("div", { class: "pay-head", text: "Match 3 \u00B7 4 \u00B7 5 from the left \u2014 pays per line bet" }),
@@ -109,6 +128,14 @@ export default {
               el("span", { class: "triple", text: SCATTER.pay[3] + " \u00B7 " + SCATTER.pay[4] + " \u00B7 " + SCATTER.pay[5] }),
               el("span", { class: "note", text: "\u00D7 total bet" })
             )
+          ),
+          /* the jackpot sign is a scatter -- it pays nothing on a line, so it is
+             not a rung of the ladder: it gets a full-width strip of its own
+             under the chips, showing what it actually does. */
+          el("div", { class: "mlchip pot" },
+            symIcon(JACKPOT),
+            el("span", { class: "triple", text: "POT" }),
+            el("span", { class: "note", text: "3 SIGNS ANYWHERE \u2014 PAYS NOTHING, TAKES THE POT" })
           )
         )
       )
@@ -143,8 +170,12 @@ export default {
       return Number.isFinite(h) && h > 0 ? h : c.offsetHeight || 40;
     }
 
+    /* a drum cell. A jackpot sign wears the red rim (.jcell in src/styles.css)
+       wherever it appears -- blurred past in the spin, and where it stops --
+       so the one symbol that can empty this machine's pot is recognisable on
+       the drums. */
     function cell(sym) {
-      return el("div", { class: "mlcell" }, symIcon(sym));
+      return el("div", { class: "mlcell" + (sym.id === JACKPOT_ID ? " jcell" : "") }, symIcon(sym));
     }
 
     function setStrip(i, syms) {
@@ -226,13 +257,14 @@ export default {
       }
     }
 
-    function scrollReel(i, grid, dur, count) {
+    function scrollReel(i, grid, dur, count, luck) {
       const strip = strips[i];
       clear(strip);
       clearSettle(strip);
       strip.style.filter = "";
+      const filler = fillerPicker(i, luck);
       const total = Math.max(6, count);
-      for (let k = 0; k < total - ROWS; k++) strip.appendChild(cell(symOf(RND_SYMBOL())));
+      for (let k = 0; k < total - ROWS; k++) strip.appendChild(cell(symOf(filler())));
       for (const id of [grid[0][i], grid[1][i], grid[2][i]]) strip.appendChild(cell(symOf(id)));
       const h = cellH();
       const landY = -(total - ROWS) * h;
@@ -456,6 +488,7 @@ export default {
     }
 
     function openPayTable() {
+      const bank = jackpotBankView(GAME_ID);
       const vw = REELS * PG_CELL + (REELS - 1) * PG_GAP;
       const vh = ROWS * PG_CELL + (ROWS - 1) * PG_GAP;
       const px = (c) => c * (PG_CELL + PG_GAP) + PG_CELL / 2;
@@ -550,6 +583,11 @@ export default {
           symIcon(SCATTER),
           el("span", { class: "triple", text: SCATTER.pay[3] + " \u00B7 " + SCATTER.pay[4] + " \u00B7 " + SCATTER.pay[5] }),
           el("span", { class: "note", text: "\u00D7 total bet" })
+        ),
+        el("div", { class: "mlchip pot" },
+          symIcon(JACKPOT),
+          el("span", { class: "triple", text: "POT" }),
+          el("span", { class: "note", text: "3 SIGNS ANYWHERE \u2014 NO LINE PAY" })
         )
       );
 
@@ -592,11 +630,24 @@ export default {
           )
         ),
         el("div", { class: "ic-sec" },
+          el("h3", { text: "The jackpot (this machine's own)" }),
+          el("ul", {},
+            el("li", { html: "<b>Three " + spriteHtml("jackpot") + " anywhere on the grid</b> \u2014 no payline needed \u2014 takes <b>this machine's progressive jackpot</b>, on top of whatever the spin already paid. A " + spriteHtml("wild") + " wild does <b>not</b> stand in for one." }),
+            el("li", { html: "The sign pays nothing on a payline: like the " + spriteHtml("bonus") + " scatter it just breaks the line it lands on \u2014 the pot is its whole job. It <b>is</b> a real symbol on every one of the fifteen cells, so you can watch it go past in the spin and see it land, ringed in red on the drum." }),
+            el("li", { html: "<b>Fortune Lines keeps its own bank.</b> Lucky Sevens, the first machine, has no jackpot at all. The Wheelhouse has a pot of its own, and a sign only ever empties the cabinet it lands on \u2014 here the trigger is about one spin in <b>4,100</b>." }),
+            el("li", { html: "This bank is fed by <b>5% of what a losing spin actually drops here</b> (the loss, never the whole stake), and only on spins that lose: one that pays you back at least your stake \u2014 a win, or a push \u2014 pays no jackpot slice at all, so neither winning nor breaking even is taxed. The house keeps half of what is fed and the other half (2.5% of the loss) climbs this cabinet's meter, so the pot hands back 1.9 points of the machine's long-run return and can never push it past 100%. A separate bank only grows as fast as its own machine is played, so a pot you spread your time across climbs more slowly than the old shared meter." }),
+            el("li", { html: "It is worth <b>tens of times an average bet</b> when it goes and is <b>not</b> capped by the table maximum \u2014 it is the players' own money, paid on top of everything else." +
+              (bank.hits > 0 || bank.best > 0
+                ? " This bank has been emptied <b>" + bank.hits + "</b> time" + (bank.hits === 1 ? "" : "s") + " in this run" + (bank.best > 0 ? ", the biggest <b>" + fmt(bank.best) + "</b>" : "") + "."
+                : "") })
+          )
+        ),
+        el("div", { class: "ic-sec" },
           el("h3", { text: "Pays per line bet" }),
           payChips,
           el("div", { class: "ic-fs", html:
             spriteHtml("bonus") + " <b>3</b> scatters \u2192 <b>10</b> free spins \u00B7 <b>4</b> \u2192 <b>15</b> \u00B7 <b>5</b> \u2192 <b>20</b>. " +
-            "Free spins run on the same paylines and can retrigger." })
+            "Free spins run on the same paylines and can retrigger. Three " + spriteHtml("jackpot") + " signs anywhere pay nothing on a line but empty <b>this machine's own</b> progressive pot \u2014 about one spin in <b>4,091</b>." })
         )
       );
 
@@ -645,7 +696,7 @@ export default {
           const counts = reels.map((_, k) => Math.round(cnt + k * 4));
           for (const r of reels) { r.classList.add("spinning"); r.classList.remove("landed"); }
           sfx.spin(durs[durs.length - 1]);
-          const proms = reels.map((reel, k) => scrollReel(k, spin.grid, durs[k], counts[k]));
+          const proms = reels.map((reel, k) => scrollReel(k, spin.grid, durs[k], counts[k], luck));
           for (let k = 0; k < reels.length; k++) {
             await proms[k];
             landReel(k, k === reels.length - 1);
@@ -713,26 +764,56 @@ export default {
         }
       }
 
-      return { multiplier: seq.multiplier };
+      const jackpotHit = !!seq.jackpot;
+      if (jackpotHit) {
+        if (!units) clear(resultEl);
+        resultEl.className = "slot-result ml-result win jackpot";
+        resultEl.appendChild(el("span", { class: "jackpot-tag", text: "JACKPOT" }));
+        /* main.js takes the pot once play() resolves, so read it here */
+        resultEl.appendChild(el("span", { class: "jackpot-amt", text: fmt(jackpotPot(GAME_ID)) }));
+        board.flash("JACKPOT");
+        if (!instant) toast("JACKPOT! Three jackpots anywhere on the drums.", "gold", 3000);
+      }
+
+      return { multiplier: seq.multiplier, jackpot: jackpotHit };
     }
 
     /* the drums paint their artwork on the very first frame rather than
        flashing empty on the first spin */
-    preloadSprites(PAYROW.map((s) => s.sprite).concat(SCATTER.sprite));
+    preloadSprites(PAYROW.map((s) => s.sprite).concat([SCATTER.sprite, JACKPOT.sprite]));
 
     return {
       root,
       play,
       actionLabel: "SPIN",
       getBetUnits: () => lines,
+      onBetChange: () => board.refresh(),
+      onJackpot: () => board.flash("JACKPOT"),
       destroy() {
+        board.dispose();
         if (root.__cleanup) root.__cleanup();
       },
     };
   },
 };
 
-function RND_SYMBOL() {
-  const pool = PAYROW;
-  return pool[Math.floor(Math.random() * pool.length)].id;
+/* The symbols a drum blurs past while it is spinning are drawn from the SAME
+   weighted table the drum itself draws its stop from (`reelWeights` in
+   slots-multi-math.js), so everything the machine really carries flashes past
+   on the way: the wild, the scatter, and the jackpot sign itself, each at the
+   rate its own drum gives it. It used to be a flat pick over the paying
+   symbols only, which is exactly why the jackpot sign was never seen in a
+   spin -- it lived in the paytable and on the meter, but never on a drum.
+
+   The table is built ONCE per scroll and then sampled, so a strip of two
+   dozen cells costs one pass over the drum, not two dozen. */
+function fillerPicker(reel, luck) {
+  const table = reelWeights(reel, luck);
+  let total = 0;
+  for (const it of table) total += it.w;
+  return function pick() {
+    let x = Math.random() * total;
+    for (const it of table) { x -= it.w; if (x <= 0) return it.id; }
+    return table[table.length - 1].id;
+  };
 }
