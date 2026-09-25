@@ -1904,8 +1904,10 @@ function cheatMode(mode) {
   cheatPanel.classList.remove("denied");
   cheatInput.type = adminPrompt ? "password" : "text";
   cheatInput.placeholder = adminPrompt ? "admin password…" : "enter code…";
-  cheatHintEl.hidden = !adminPrompt;
-  cheatHintEl.textContent = adminPrompt ? "RESTRICTED \u2014 ADMIN PASSWORD REQUIRED" : "";
+  if (cheatHintEl) {
+    cheatHintEl.hidden = !adminPrompt;
+    cheatHintEl.textContent = adminPrompt ? "RESTRICTED \u2014 ADMIN PASSWORD REQUIRED" : "";
+  }
   cheatInput.value = "";
 }
 
