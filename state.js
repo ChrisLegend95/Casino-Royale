@@ -46,6 +46,15 @@ export const CONFIG = {
   idleDefaultBet: cfg("idleDefaultBet", 10),
   idleXpMult: cfg("idleXpMult", 3),
   froggerBlockSec: cfg("froggerBlockSec", 0.34),
+  // Frogger's hurry-up (see the header note in src/games/frogger.js). The grass
+  // stays perfectly safe -- nothing on it can kill you -- but loitering on it
+  // costs you your rung: the first froggerPatienceSec spent standing on a piece
+  // of grass is free, and every second after that drains `froggerPatienceDecay`
+  // off the banked multiplier, cumulatively for the whole run. It is the
+  // non-fatal hurry-up the machine's own notes ask for, and it is what stops
+  // "wait out every convoy forever" from being a free money printer.
+  froggerPatienceSec: cfg("froggerPatienceSec", 1.0),
+  froggerPatienceDecay: cfg("froggerPatienceDecay", 0.95),
 
   // Save generation -- see the comment on `saveVersion` in main.pjs. A stored save
   // is only accepted when its `v` equals this, so bumping the knob in main.pjs
@@ -94,7 +103,7 @@ export const CONFIG = {
   // colour). memLadderCap is the machine's own ceiling.
   memSkillKnee: cfg("memSkillKnee", 5),
   memLadderRtp: cfg("memLadderRtp", 0.95),
-  memSkillDecay: cfg("memSkillDecay", 0.88),
+  memSkillDecay: cfg("memSkillDecay", 0.93),
   memLadderCap: cfg("memLadderCap", 8),
   // the machine's table maximum (it overrides the house level limit): see main.js
   memTableBase: cfg("memTableBase", 100),
@@ -110,7 +119,7 @@ export const CONFIG = {
   xpTierSize: cfg("xpTierSize", 10),
   xpTierSpike: cfg("xpTierSpike", 2),
   xpRate: cfg("xpRate", 0.1),
-  levelReward: cfg("levelReward", 10),
+  levelReward: cfg("levelReward", 5),
   // ---- balance book (see main.pjs) ----
   // Luck is a per-round odds nudge, hard-capped at luckCap and tuned per machine
   // so no game is ever pushed past 100% by it. Fat Stacks and Safety Net pay on
@@ -124,6 +133,31 @@ export const CONFIG = {
   winBonusStack: cfg("winBonusStack", 0.005),
   rebateStack: cfg("rebateStack", 0.005),
   profitStack: cfg("profitStack", 0.001),
+  // THE PIT'S RAKE-BACK BUDGET (see the balance book in main.pjs). This is the
+  // cap on what the STAKE-bounded perks -- Fat Stacks plus Safety Net -- may
+  // hand back on one round, as a fraction of the stake, and it is deliberately
+  // smaller than the thinnest house edge in the building (roulette's 2.7%). It
+  // is what stops a perk build from turning any table into a printer: a player
+  // may claw back a slice of the house's edge, never all of it. It is applied
+  // in applyPerks() (main.js). It does NOT bound the endless Fortune perk,
+  // which pays on the PROFIT instead and is priced as the long-run power curve,
+  // nor the level comp (bounded separately -- see grantXp below).
+  perkBudget: cfg("perkBudget", 0.015),
+  // Gambler: the house TABLE LIMIT multiplier per stack (+0.5 = +50% a stack).
+  // It moves a LIMIT, never a payout, and a machine's own maxBet() still wins --
+  // see tableLimit() in main.js.
+  gamblerStack: cfg("gamblerStack", 0.5),
+  // On the House: the chance per stack that a losing round is comped in full (a
+  // push, bounded by the loss itself -- see playRound in main.js). Deliberately
+  // small: the comp hands back a WHOLE stake on the round it fires, so its
+  // expected contribution is this chance times P(lose), and that number has to
+  // fit inside the rake-back budget above. Five stacks is a 1% chance -- about
+  // half a point of return on a coin-flip table.
+  compStack: cfg("compStack", 0.002),
+  // Pit Boss's Nephew: the loan principal's bonus multiplier per stack (+0.5 =
+  // x1.5 at one stack). The repayment is derived from the principal as always,
+  // so a bigger loan is a bigger debt -- see loanPrincipal() below.
+  nephewStack: cfg("nephewStack", 0.5),
   tableLimitBase: cfg("tableLimitBase", 400),
   tableLimitExp: cfg("tableLimitExp", 1.35),
   maxWinMult: cfg("maxWinMult", 1000),
@@ -172,7 +206,77 @@ export const CONFIG = {
   rrRake: cfg("rrRake", 0),  // the whole ladder: [[bank multiplier, live rounds], ...] per round, read from
   // the pjs function in main.pjs (revolver.js falls back to the same rows if null)
   rrLadder: cfgLadder("rrLadder"),
+  // Wheelhouse ("slots-wheel") -- the five bonus-wheel multipliers, in the order
+  // they sit on the disc (see src/games/slots-wheel-math.js). Every segment is
+  // equally likely and each pays that multiple of the TOTAL stake, so the wheel
+  // is worth their MEAN per trigger: 11.6 with these defaults. Three or more
+  // wheel scatters ANYWHERE on the grid bring the wheel in -- about 1 spin in 143
+  // -- so the wheel is worth roughly 8% of the machine's return and each of these
+  // is a direct multiplier on it. See the balance book in main.pjs before
+  // touching them. Keep them ascending: the disc is drawn in this order and the
+  // landed label is the one that reads upright.
+  wheelMult1: cfg("wheelMult1", 3),
+  wheelMult2: cfg("wheelMult2", 5),
+  wheelMult3: cfg("wheelMult3", 10),
+  wheelMult4: cfg("wheelMult4", 15),
+  wheelMult5: cfg("wheelMult5", 25),
+
+  // ---- the slot jackpots (one bank per 5-reel cabinet) ----
+  // THE TWO 5-REEL MACHINES EACH KEEP THEIR OWN PROGRESSIVE. A losing spin on a
+  // cabinet puts `jackpotRate` of the amount it LOST -- not of the whole stake
+  // -- aside for THAT CABINET'S pot -- Fortune Lines feeds Fortune Lines,
+  // Wheelhouse feeds Wheelhouse -- and a sign can only ever empty the bank of
+  // the machine it landed on. The house keeps `jackpotHouseCut` of each slice
+  // and the rest climbs that cabinet's meter, so with the defaults (5%, half) a
+  // meter gains 0.025 of every loss. A spin that pays the player back AT LEAST
+  // their stake -- a win, or a push that returns the stake exactly -- pays no
+  // slice at all (main.js decides that after the round resolves, on a strict
+  // `payout < stake` test), so a bank is fed only by rounds the player actually
+  // lost money on AT THAT CABINET. A bank is emptied by three JACKPOT symbols
+  // anywhere on THAT machine's drums (about 1 in 4,100 on Fortune Lines and
+  // 1 in 4,500 on Wheelhouse -- see the balance book in main.pjs and the
+  // jackpot section of DEV-NOTES.md).
+  //
+  // THE FEED IS A TRANSFER, NOT AN EDGE, AND IT IS SIZED TO KEEP THE MACHINE
+  // UNDER 100%. Nothing is charged to the player -- the payout is untouched and
+  // the slice comes out of the loss the house already holds -- so the only term
+  // that moves the player's long-run return is the part that reaches the POT.
+  // With the defaults that is 0.025 of the loss: 1.88 points on Fortune Lines
+  // and 1.64 on Wheelhouse, measured over the machines' own spin distribution.
+  // The figures the two cabinets advertise (93.65% / 96.38% cold) are therefore
+  // their own model figures (91.77% / 94.74%) PLUS the pot, which is the honest
+  // long-run return of a cabinet whose meters are eventually always collected;
+  // a player who never sees a pot realizes exactly the model figure. The house's
+  // realized hold is correspondingly its model edge MINUS the pot -- 6.35 points
+  // on Fortune Lines, 3.62 on Wheelhouse. If the feed is ever raised, the pot's
+  // share must stay under the thinner of those edges: at the old 0.30 x 0.8 the
+  // pot was worth 18 points against an 8.2-point edge, which is how both
+  // cabinets came to advertise under 100% while actually paying over 110%.
+  //
+  // LUCKY SEVENS HAS NO POT AT ALL -- the player's call: the 3-reel machine is
+  // the plain one. No sign, no meter, no slice taken off any spin, and the whole
+  // of its edge is its paytable (95.679% cold / 96.687% at the luck cap; six
+  // symbols, every one of them paying -- the dead stop it used to carry came off
+  // the drum at the player's request and the ladder came down with it). It is
+  // not in JACKPOT_GAMES below, which is what makes `isJackpotGame("slots")`
+  // false, so `playRound` can never feed it and no bank can be conjured for it;
+  // its old bank is paid back to the player on load (see hydrateState).
+  jackpotRate: cfg("jackpotRate", 0.05),
+  jackpotHouseCut: cfg("jackpotHouseCut", 0.5),
 };
+
+/* The cabinets that carry a progressive meter. They are also the only machines
+   whose spins feed, and can take, a bank -- a jackpot sign only ever appears on
+   these drums, so nothing else in the pit has a pot to charge. Lucky Sevens is
+   deliberately NOT here: it has no jackpot at all (see the block above). */
+export const JACKPOT_GAMES = ["slots-multi", "slots-wheel"];
+export function isJackpotGame(id) { return JACKPOT_GAMES.indexOf(id) !== -1; }
+function emptyBank() { return { amount: 0, fed: 0, best: 0, hits: 0 }; }
+function newJackpotBanks() {
+  const out = {};
+  for (const id of JACKPOT_GAMES) out[id] = emptyBank();
+  return out;
+}
 
 const SAVE_KEY = "casino-royale.save.v1";
 const HISTORY_MAX = 150;
@@ -191,7 +295,7 @@ function newRun() {
     frogger: { bestDepth: 0, bestMult: 1 },
     memory: { bestLen: 0, bestMult: 1 },
     revolver: { bestMult: 1, runs: 0, busts: 0 },
-    holdem: { bots: CONFIG.holdemBots, bestMult: 1, bestPot: 0 },
+    holdem: { bots: CONFIG.holdemBots, bestMult: 1, bestPot: 0, helper: false },
     stats: {
       plays: 0,
       wagered: 0,
@@ -216,6 +320,14 @@ function newRun() {
     loan: { active: false, principal: 0, repay: 0, takenAt: 0, deadline: 0 },
     idle: { on: false, bet: CONFIG.idleDefaultBet },
     machine: "slots",
+    /* one progressive bank PER 5-REEL CABINET (see the jackpot block below).
+       Fortune Lines and Wheelhouse each feed and empty their OWN pot, so a sign
+       on one can never take a bank the other paid for. Per bank: `amount` is the
+       pot on that cabinet's meter, `fed` is everything the player has ever put
+       into THAT bank, `best` is the biggest pot it has ever taken, `hits` how
+       many times it has landed. Lucky Sevens has no bank at all; a save that
+       still carries one has it paid to the player (see hydrateState). */
+    jackpots: newJackpotBanks(),
     infMoney: false,
     infMoneySaved: 0,
     cheatWin: false,
@@ -252,7 +364,7 @@ export const SAVE_DEBOUNCE = SAVE_DEBOUNCE_MS;
 /* How the last loadState() went. `wipedSave` means the save it found was written by
    a different save generation (see CONFIG.saveVersion) and was thrown away -- the
    boot code uses it to tell the player their run was reset by the update. */
-export const loadFlags = { wipedSave: false };
+export const loadFlags = { wipedSave: false, paidSlotsPot: 0 };
 
 /* Merge a parsed save object into the live state, shape-normalising every field on
    the way. loadState() calls this after its generation check; the cloud loader
@@ -270,9 +382,53 @@ function hydrateState(data) {
   state.frogger = Object.assign({ bestDepth: 0, bestMult: 1 }, data.frogger || {});
   state.memory = Object.assign({ bestLen: 0, bestMult: 1 }, data.memory || {});
   state.revolver = Object.assign({ bestMult: 1, runs: 0, busts: 0 }, data.revolver || {});
-  state.holdem = Object.assign({ bots: CONFIG.holdemBots, bestMult: 1, bestPot: 0 }, data.holdem || {});
+  state.holdem = Object.assign({ bots: CONFIG.holdemBots, bestMult: 1, bestPot: 0, helper: false }, data.holdem || {});
   if (!Number.isFinite(state.holdem.bots) || state.holdem.bots < 1) state.holdem.bots = 1;
   if (state.holdem.bots > 3) state.holdem.bots = 3;
+  /* the helper chip is a coaching aid, so it ships OFF and only a save that
+     says otherwise turns it on (a save from before the toggle is off) */
+  state.holdem.helper = state.holdem.helper === true;
+  /* the jackpot banks are running totals, so a save that predates them (or a
+     hand-edited one) must come back as sane numbers, never a NaN on a meter.
+     Every cabinet that still carries a pot is copied through as it stands. Two
+     things a save can carry that are no longer collected are REFUNDED rather
+     than dropped, because a bank is only ever the players' own money (it was fed
+     by their losing spins): Lucky Sevens' bank, now the machine has no pot, and
+     the even older single shared `jackpot` object when the player was standing
+     at a machine that has no meter at all. The refund is paid into the balance
+     once, and `loadFlags.paidSlotsPot` carries the figure up to the boot code
+     for a toast. It cannot pay twice: the state written back has no slots bank
+     in it, so the next load finds nothing to refund. */
+  let jackpotRefund = 0;
+  const refundBank = (bank) => {
+    if (!bank || typeof bank !== "object") return;
+    const amount = Number(bank.amount);
+    if (Number.isFinite(amount) && amount > 0) jackpotRefund += amount;
+  };
+  state.jackpots = newJackpotBanks();
+  const savedBanks = data.jackpots && typeof data.jackpots === "object" ? data.jackpots : null;
+  if (savedBanks) {
+    for (const id of JACKPOT_GAMES) {
+      const b = savedBanks[id];
+      if (b && typeof b === "object") state.jackpots[id] = Object.assign(emptyBank(), b);
+    }
+    refundBank(savedBanks.slots);
+  } else if (data.jackpot && typeof data.jackpot === "object") {
+    if (isJackpotGame(data.machine)) {
+      state.jackpots[data.machine] = Object.assign(emptyBank(), data.jackpot);
+    } else {
+      refundBank(data.jackpot);
+    }
+  }
+  delete state.jackpot;
+  for (const id of JACKPOT_GAMES) {
+    const j = state.jackpots[id];
+    for (const k of ["amount", "fed", "best", "hits"]) {
+      const v = Number(j[k]);
+      j[k] = Number.isFinite(v) && v > 0 ? v : 0;
+    }
+    j.amount = round2(j.amount);
+  }
   if (!state.stats.byGame || typeof state.stats.byGame !== "object") state.stats.byGame = {};
   /* the marker must come from the save itself -- newRun()'s default would otherwise
      make every old save look already-migrated */
@@ -282,6 +438,13 @@ function hydrateState(data) {
   }
   if (!Number.isFinite(state.money)) state.money = CONFIG.startingMoney;
   state.money = Math.round(state.money);
+  /* a pot that is no longer collected (see the bank block above) goes back into
+     the balance, rounded along with the money it joins; the boot code reads the
+     figure off loadFlags and tells the player where it came from */
+  if (jackpotRefund > 0) {
+    loadFlags.paidSlotsPot = round2(jackpotRefund);
+    state.money = Math.round(state.money + jackpotRefund);
+  }
   state.infMoney = !!state.infMoney;
   state.cheatWin = !!state.cheatWin;
   if (!Number.isFinite(state.infMoneySaved) || state.infMoneySaved < 0) state.infMoneySaved = state.money;
@@ -471,6 +634,103 @@ export function canAfford(n) {
   return state.money >= n - 1e-9;
 }
 
+/* ---------- the slot jackpots (one bank per 5-reel cabinet) ----------
+   THE TWO 5-REEL MACHINES EACH HAVE THEIR OWN PROGRESSIVE. (Lucky Sevens has
+   none: not in JACKPOT_GAMES, so `isJackpotGame` is false for it and main.js
+   never feeds it -- see the block at the tunables.) A bank is funded by the
+   players' own stakes on THAT CABINET -- but only by the money they actually
+   LOSE there, never by the stake itself. Every spin whose payout comes back
+   UNDER the stake puts CONFIG.jackpotRate (30%) of that LOSS aside (main.js
+   decides that, after the round resolves, on the actual shortfall -- a winning
+   spin is never taxed, and neither is a push, which hands the stake straight
+   back), the house keeps CONFIG.jackpotHouseCut of the slice, and the
+   remainder goes on that cabinet's meter. Nothing is conjured: a pot is a slice
+   of money that has already been lost AT THAT MACHINE, so paying it out returns
+   most of what the machine took. (The house cut is what the HOUSE keeps of the
+   feed; the other half is handed back to whoever wins the pot, so a pot
+   machine's long-run return is its model figure PLUS 0.025 x the loss it takes
+   -- 1.88 points on Fortune Lines, 1.64 on Wheelhouse, which is where the
+   93.65% and 96.38% the two cabinets advertise come from. THAT is the number
+   that has to stay under 100%, and it is sized to: the pot's share is smaller
+   than the machine's own edge, so the house's realized hold is its edge minus
+   the pot and can never go negative. Charging the LOSS rather than the stake is
+   half the reason the arithmetic closes -- with the feed on a flat 30% of the
+   STAKE and 80% of it to the pot, the pot handed back about 18 points of a
+   machine whose edge is 8.2, which is a money printer for anyone patient enough
+   to collect it. The balance book in main.pjs and the jackpot section of
+   DEV-NOTES carry the working.) That is also why a bank needs no cap and no
+   seed: it can never pay more than was put into it. Keeping
+   one bank per cabinet means one machine's losers never fund another machine's
+   winner.
+
+   Each machine's maths arms its own trigger: three or more JACKPOT symbols
+   anywhere on ITS drums (evaluateGrid in slots-wheel-math.js and
+   slots-multi-math.js). A wild never stands in for one, and the symbol itself
+   pays nothing -- it is a scatter in the same family as the wagon wheel.
+
+   The banks live in the run (and therefore in the save and in cloud saves), so
+   each of a regular's meters keeps climbing between sessions. */
+
+/* the bank a call belongs to. Anything that is not one of the two pot cabinets
+   (or a call with no id at all) falls back to the cabinet the player is
+   standing at, then to Fortune Lines, so a bad caller can never invent a
+   phantom bank or write a pot onto `undefined` -- and, in particular, a stray
+   call on Lucky Sevens' behalf can never quietly charge the player for a pot
+   that machine does not carry. */
+function jackpotBankId(gameId) {
+  if (isJackpotGame(gameId)) return gameId;
+  if (isJackpotGame(state.machine)) return state.machine;
+  return JACKPOT_GAMES[0];
+}
+function jackpotBank(gameId) {
+  if (!state.jackpots || typeof state.jackpots !== "object") state.jackpots = newJackpotBanks();
+  const id = jackpotBankId(gameId);
+  let bank = state.jackpots[id];
+  if (!bank || typeof bank !== "object") { bank = emptyBank(); state.jackpots[id] = bank; }
+  return bank;
+}
+
+/* `loss` is the amount the round FAILED to return -- main.js passes
+   `roundStake - payout` on a strict `payout < stake` test, never the whole
+   stake. See the tunables above for why the feed is charged on the loss. */
+export function jackpotFeed(loss, gameId) {
+  const rate = Math.max(0, Number(CONFIG.jackpotRate) || 0);
+  const feed = round2((Number(loss) || 0) * rate);
+  if (!(feed > 0)) return 0;
+  const cut = Math.min(1, Math.max(0, Number(CONFIG.jackpotHouseCut) || 0));
+  const pot = round2(feed * (1 - cut));
+  const j = jackpotBank(gameId);
+  j.amount = round2(j.amount + pot);
+  j.fed = round2(j.fed + feed);
+  emit("jackpot", { game: jackpotBankId(gameId), amount: j.amount });
+  return pot;
+}
+
+/* take the whole pot (three jackpots landed on that machine). Empties that
+   cabinet's meter and returns the money for the caller to bank; the caller owns
+   the books and the celebration, exactly as it does for a machine's own
+   payout. The other two banks are untouched. */
+export function jackpotTake(gameId) {
+  const j = jackpotBank(gameId);
+  const pot = Math.max(0, Math.round(j.amount));
+  j.amount = 0;
+  if (pot > j.best) j.best = pot;
+  j.hits += 1;
+  emit("jackpot", { game: jackpotBankId(gameId), amount: 0 });
+  return pot;
+}
+
+export function jackpotPot(gameId) {
+  return Math.max(0, jackpotBank(gameId).amount);
+}
+
+/* the whole bank for a cabinet, for readouts that want more than the pot (the
+   info cards show what a machine has fed and taken). Returns a copy, so a
+   caller can never scribble on live state. */
+export function jackpotBankView(gameId) {
+  return Object.assign(emptyBank(), jackpotBank(gameId));
+}
+
 /* ---------- xp / levels ---------- */
 // Milestone tiers: XP needed per level is xpBase * L^xpExp, then multiplied by
 // xpTierSpike once for every completed block of xpTierSize levels. So levelling is
@@ -488,15 +748,23 @@ export function xpNeeded(level) {
   const lv = Math.max(1, level);
   return Math.round(CONFIG.xpBase * Math.pow(lv, CONFIG.xpExp) * xpTierSpikeFor(lv));
 }
-export function grantXp(amount) {
+/* `rewardScale` is 1 for ordinary hand-played rounds; it is 1/(xp multiplier)
+   when the XP on the round was boosted (Scholarship stacks, IDLE). The level
+   reward is a COMP ON MONEY RISKED -- it has to stay smaller than every
+   machine's edge (see the balance book in main.pjs) -- so the XP perks and IDLE
+   buy faster LEVELS, never a bigger comp per dollar staked. Without this, a
+   maxed Scholar idling a thin-edge table would earn a comp larger than that
+   table's edge and the comp itself would become the printer. */
+export function grantXp(amount, rewardScale = 1) {
   if (!(amount > 0)) return [];
   state.xp += amount;
   const gained = [];
+  const scale = Number.isFinite(rewardScale) && rewardScale > 0 ? rewardScale : 1;
   let guard = 0;
   while (state.xp >= xpNeeded(state.level) && guard++ < 500) {
     state.xp -= xpNeeded(state.level);
     state.level += 1;
-    const reward = Math.round(CONFIG.levelReward * state.level);
+    const reward = Math.round(CONFIG.levelReward * state.level * scale);
     addMoney(reward);
     gained.push({ level: state.level, reward });
   }
@@ -517,14 +785,21 @@ export function xpProgress() {
 }
 
 /* ---------- loan ---------- */
-export function loanPrincipal() {
-  return Math.max(1000, Math.round(CONFIG.loanBase + CONFIG.loanPerLevel * (state.level - 1)));
+/* `boost` is the Pit Boss's Nephew multiplier (0 by default, +0.5 per stack): it
+   stretches the PRINCIPAL, and the repayment is derived from that principal with
+   the same interest, so a bigger loan is a bigger debt. Nothing else about the
+   loan moves -- the clock, the interest rate and the default rule are unchanged,
+   which is what keeps a perk that hands out more rope from also loosening the
+   knot. */
+export function loanPrincipal(boost = 0) {
+  const mult = 1 + Math.max(0, Number(boost) || 0);
+  return Math.max(1000, Math.round((CONFIG.loanBase + CONFIG.loanPerLevel * (state.level - 1)) * mult));
 }
 export function loanRepay(principal) {
   return Math.round(principal * (1 + CONFIG.loanInterest));
 }
-export function takeLoan() {
-  const principal = loanPrincipal();
+export function takeLoan(boost = 0) {
+  const principal = loanPrincipal(boost);
   const repay = loanRepay(principal);
   state.loan = {
     active: true,

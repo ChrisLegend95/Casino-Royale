@@ -2,6 +2,7 @@ import {
   CONFIG, state, loadState, saveState, resetRun, addMoney, canAfford, round2, roundMoney,
   grantXp, xpProgress, xpNeeded, recordPlay, takeLoan, repayLoan, failLoan,
   loanExpired, loanRemainingMs, loanPrincipal, loanRepay, on, emit, clearSave, loadFlags,
+  jackpotFeed, jackpotTake, isJackpotGame,
 } from "./state.js";
 import { PERKS, PERK_ORDER, perkCost, stacksOf, isMaxed, buyPerk, computeEffects, perkShopCount, maxOutFinitePerks } from "./perks.js";
 import {
@@ -28,6 +29,14 @@ if (hadSave) saveState(true);
 if (loadFlags.wipedSave) {
   setTimeout(() => toast("Updated! Your old save was reset \u2014 new run, " + fmt(CONFIG.startingMoney) + " to start.", "gold", 5600), 700);
 }
+/* The 3-reel machine lost its progressive (and took no slice off any spin), so a
+   bank it was still holding when this version arrived is the player's own money
+   sitting in a pot that no longer exists. state.js pays it into the balance on
+   load and reports it here, so the windfall is explained rather than mysterious. */
+if (loadFlags.paidSlotsPot > 0) {
+  const paid = loadFlags.paidSlotsPot;
+  setTimeout(() => toast("Lucky Sevens has no jackpot any more \u2014 its pot (" + fmt(paid) + ") has been paid into your balance.", "gold", 6400), 760);
+}
 
 const topbar = {
   money: document.getElementById("moneyEl"),
@@ -48,6 +57,7 @@ const topbar = {
   loanText: document.getElementById("loanText"),
   loanClock: document.getElementById("loanClock"),
   loanFill: document.getElementById("loanFill"),
+  loanRepayBtn: document.getElementById("loanRepayBtn"),
   stage: document.getElementById("stage"),
   nav: document.getElementById("machineNav"),
   betPanel: document.getElementById("betPanel"),
@@ -116,6 +126,12 @@ function lineBetCost(stake) {
    take the whole bankroll. */
 function tableLimit() {
   let lim = CONFIG.tableLimitBase * Math.pow(Math.max(1, state.level), CONFIG.tableLimitExp);
+  /* The Gambler's levers: the perk lifts the HOUSE limit only. It is a limit,
+     never an edge -- no return, no advertised top and no payout moves with it --
+     and a machine with a table maximum of its OWN (Neon Recall's memory ladder)
+     still overrides it below, because that ceiling is load-bearing for that
+     machine's balance. */
+  lim *= Math.max(1, computeEffects().tableMult);
   if (typeof game.maxBet === "function") {
     const v = Number(game.maxBet(state.level));
     if (Number.isFinite(v) && v > 0) lim = v;
@@ -139,32 +155,54 @@ function moneyLabel() {
   return state.infMoney ? "\u221E" : fmt(state.money);
 }
 
-/* Perks pay a small bonus on top of whatever the game returned. Fat Stacks adds
-   winBonus of the STAKE on a winning round and Safety Net refunds rebate of the
-   stake on a losing one: both are flat and tiny by construction, so a jackpot
-   cannot snowball them (see the balance book in main.pjs). Fortune is the third
-   lever and it is deliberately different -- profitBonus is a flat percentage of
-   the PROFIT, so a big multiplier does scale it. That is the intended long-run
-   power curve (a fully grown regular can be ahead of the house), and it can never
-   invent money on a round that did not win: a loss and a push are untouched.
-   `usePerks` is false at tables that opt out -- the House's blackjack, where the
-   edge is already razor thin.
+/* The Pit Boss's Nephew's stretch on the credit line: 0 stacks = 1, +0.5 a stack.
+   Only the PRINCIPAL is stretched -- the interest rate and the clock are not --
+   so a bigger loan is a bigger debt, which is the whole joke of the perk. */
+function loanBoost() {
+  return Math.max(0, computeEffects().loanMult);
+}
 
-   The rebate is also bounded by the LOSS ITSELF: a machine that can lose only
-   part of the stake (Texas Hold'em returns your stack, so a hand can come back
-   at x0.96) must never pay back more than was actually dropped, or a
-   deliberately tiny loss would be a money printer. Every other machine loses the
-   whole stake, where min() is a no-op. */
+/* Perks pay a small bonus on top of whatever the game returned, and the whole
+   of the STAKE-bounded side of them (Fat Stacks on a win, Safety Net on a loss)
+   is capped by the pit's rake-back budget, CONFIG.perkBudget. Two rules, both
+   load-bearing:
+
+   1. A stake bonus can never pay more than the round itself made or lost.
+      Fat Stacks is a slice of the stake, but it is min()'d against the PROFIT
+      first, so a bet that wins by a hair cannot be magnified into a fortune:
+      "win 1% of the stake, collect 25% of it back" was a printer at any target
+      where the win is small (Rocket Crash at x1.01 was the worst of them).
+      Safety Net is min()'d against the loss for the same reason -- a machine
+      that can lose only part of the stake (Texas Hold'em returns your stack, so
+      a hand can come back at x0.96) must never pay back more than was dropped.
+   2. The two together are then clamped to CONFIG.perkBudget x the stake -- the
+      most the pit hands back on one round. That number is deliberately under
+      the thinnest house edge in the building (roulette's 2.7%), so no stack of
+      perks can ever turn a table into a money printer: the player can claw back
+      a slice of the house's edge, never all of it.
+
+   Fortune is the exception and is deliberately different -- profitBonus is a
+   flat percentage of the PROFIT, applied OUTSIDE the budget, so a big
+   multiplier does scale it. That is the intended long-run power curve (the one
+   route by which a fully grown regular can get ahead of the house), and it can
+   never invent money on a round that did not win: a loss and a push are
+   untouched. It is also priced out of reach on purpose -- the cost climbs 35% a
+   stack while the pay does not, so it never pays for itself.
+
+   `usePerks` is false at tables that opt out -- the House's blackjack, where the
+   edge is already razor thin. */
 function applyPerks(stake, rawMult, eff, usePerks = true) {
   const base = stake * rawMult;
   const profit = base - stake;
   if (!usePerks) return { payout: roundMoney(base), profit: roundMoney(profit) };
+  const budget = Math.max(0, stake * CONFIG.perkBudget);
   if (profit > 0) {
-    const bonus = stake * eff.winBonus + profit * eff.profitBonus;
+    const flat = Math.min(Math.min(stake * eff.winBonus, profit), budget);
+    const bonus = flat + profit * eff.profitBonus;
     return { payout: roundMoney(base + bonus), profit: roundMoney(profit + bonus) };
   }
   if (profit < 0) {
-    const refund = Math.min(stake * eff.rebate, -profit);
+    const refund = Math.min(Math.min(stake * eff.rebate, -profit), budget);
     return { payout: roundMoney(base + refund), profit: roundMoney(profit + refund) };
   }
   return { payout: roundMoney(base), profit: 0 };
@@ -218,6 +256,14 @@ async function playRound(instant = false, opts = {}) {
   setPlayEnabled(false);
   roundStake = cost;
   addMoney(-cost);
+  /* THE TWO 5-REEL MACHINES keep a progressive pot each, and the slice is set
+     aside AFTER the spin resolves -- because it is only charged when the spin
+     actually LOSES (a win, and a push that hands the stake straight back, are
+     both exempt -- see below). The house takes its cut on the way in; feeding
+     is charged against the STAKE, which is why it scales with the bet and can
+     never be farmed, and only the machine the player is actually spinning can
+     take its own pot with three jackpot symbols anywhere on its drums. Lucky
+     Sevens has no pot at all, so no spin there is charged a penny for one. */
   renderTop();
 
   let res = { multiplier: 0 };
@@ -239,8 +285,53 @@ async function playRound(instant = false, opts = {}) {
   const rawMult = Math.max(0, Number(res.multiplier) || 0);
   const mult = Math.min(CONFIG.maxWinMult, rawMult);
   res = Object.assign({}, res, { multiplier: mult, capped: rawMult > mult });
-  const { payout, profit } = applyPerks(roundStake, mult, eff, !game.noPerks);
+  let { payout, profit } = applyPerks(roundStake, mult, eff, !game.noPerks);
+  /* ON THE HOUSE: a comped loss comes back whole. It is rolled only on a genuine
+     LOSS, it is bounded by that loss (a round can only be comped back to exactly
+     its own stake), it is skipped at `noPerks` tables, and it is rolled BEFORE
+     the pot is added -- a round that is about to win a pot was not a loss. A comp
+     is a PUSH: neither a win nor a loss for the books, so it pays no XP, feeds no
+     jackpot and reads as a refund on the history line. */
+  let comped = false;
+  if (!game.noPerks && profit < 0 && eff.compChance > 0 && Math.random() < eff.compChance) {
+    payout = roundMoney(roundStake);
+    profit = 0;
+    comped = true;
+  }
+  /* The jackpot is paid OUTSIDE the machine's multiplier, the house maximum and
+     the perk maths. It is the players' own money being handed back, not a win
+     the house is funding, so clamping it as if it were a 1000x round would let
+     the ceiling quietly confiscate a pot that had grown past it -- and the perks
+     must not ride a pot that was never a bet. `jackpotTake(gameId)` empties THIS
+     MACHINE'S meter (which the LED board is subscribed to, so it zeroes on
+     screen immediately) and returns what was in it; the other pot machine's bank
+     is untouched. The `isJackpotGame` test is belt-and-braces: only a machine
+     that carries a bank can report `jackpot`, and a stray truthy flag on any
+     other table must never be able to make `jackpotTake` fall back to a bank
+     that is not its own. */
+  let jackpotWon = 0;
+  if (res.jackpot && isJackpotGame(gameId)) {
+    jackpotWon = jackpotTake(gameId);
+    payout = roundMoney(payout + jackpotWon);
+    profit = roundMoney(profit + jackpotWon);
+  }
   if (payout > 0) addMoney(payout);
+  /* THE JACKPOT SLICE IS ONLY CHARGED ON A GENUINE LOSS, AND ONLY BY THE
+     CABINET THAT TOOK THE SPIN. A round that pays the player back AT LEAST
+     their stake -- a win, or a push that hands the stake straight back -- pays
+     no jackpot contribution at all, so a bank is funded only by the rounds the
+     player actually lost money on at that machine. The slice is charged against
+     the LOSS (stake minus payout), never the whole stake: a bank is the
+     players' own money coming back, and charging the stake meant the pot handed
+     back more than the machine's own edge could ever take (see the balance book
+     in main.pjs) -- a money printer for anyone patient enough to collect it. On
+     the loss it is a slice of what the machine really took, so the machine's
+     return stays under 100% whether or not the pot is ever hit. It goes into
+     THIS MACHINE'S pot, which only its own three jackpot symbols can empty. */
+  const roundLost = payout < roundStake;
+  if (roundLost && isJackpotGame(gameId)) {
+    jackpotFeed(roundStake - payout, gameId);
+  }
   recordPlay({ game: gameId, stake: roundStake, payout, multiplier: mult });
   renderHistoryPanel();
 
@@ -248,11 +339,15 @@ async function playRound(instant = false, opts = {}) {
      stake -- a bank on the verge at x1.00, a push, a cash-out before the first
      shot -- earns nothing (otherwise "start a round, immediately bank at x1.00,
      repeat" is a risk-free level-and-money printer), and a table whose edge is
-     thinner than the comp (blackjack) opts out with `noXp`. */
-  const xpGain = (profit === 0 || game.noXp)
-    ? 0
-    : roundStake * CONFIG.xpRate * eff.xpMult * (opts.idle ? CONFIG.idleXpMult : 1);
-  const levels = grantXp(xpGain);
+     thinner than the comp (blackjack) opts out with `noXp`. The XP perks and
+     IDLE do boost the XP, and so buy levels faster -- but they must not inflate
+     the CASH comp, or a maxed Scholar idling a thin-edge table would earn more
+     back per dollar than that table's edge takes, and the comp itself would be
+     the printer. So the reward is scaled by the reciprocal of the multiplier:
+     everyone earns the same comp per dollar RISKED, whatever they have bought. */
+  const xpMult = (opts.idle ? CONFIG.idleXpMult : 1) * eff.xpMult;
+  const xpGain = (profit === 0 || game.noXp) ? 0 : roundStake * CONFIG.xpRate * xpMult;
+  const levels = grantXp(xpGain, xpMult > 0 ? 1 / xpMult : 1);
 
   playing = false;
   refreshPlayEnabled();
@@ -267,20 +362,50 @@ async function playRound(instant = false, opts = {}) {
       if (profit >= 4000 || mm >= 40) tier = 4;
       sfx.win(tier);
       sfx.cash(tier);
+      /* SHOWBOAT: still no money in it -- just a louder room. The confetti scales
+         with the stacks, and a full three stacks puts the SHOWBOAT banner on the
+         popup (below) and calls the pit's attention to a big one. */
+      if (eff.showboat > 0) {
+        confetti(25 + 40 * eff.showboat);
+        if (eff.showboat >= 3 && (mm >= 8 || profit >= 500)) {
+          toast("SHOWBOAT \\u2014 the whole pit is watching you.", "gold", 3000);
+        }
+      }
     } else if (payout === 0) {
       sfx.lose();
     }
     if (res.capped) toast("House maximum \u2014 paid at \u00D7" + mult.toFixed(2) + ".", "gold", 2600);
   }
 
-  if (!instant && profit > 0 && (!opts.idle || profit >= 50)) {
+  /* the pot gets its own, louder celebration, and its own popup -- the ordinary
+     win popup is suppressed below so a jackpot cannot show two of them */
+  if (!instant && jackpotWon > 0) {
+    confetti(150);
+    winPopup({ amount: jackpotWon, mult: 0, label: "JACKPOT" });
+    toast("JACKPOT \u2014 " + fmt(jackpotWon) + " from the " + game.name + " jackpot!", "gold", 5200);
+    if (inst && typeof inst.onJackpot === "function") {
+      try { inst.onJackpot(); } catch (err) { console.error(err); }
+    }
+  }
+
+  if (!instant && profit > 0 && jackpotWon <= 0 && (!opts.idle || profit >= 50)) {
     winPopup({
       amount: profit,
       mult,
-      label: opts.idle ? "IDLE WIN" : "YOU WIN",
+      label: (eff.showboat >= 3 && (mult >= 8 || profit >= 500))
+        ? "SHOWBOAT"
+        : (opts.idle ? "IDLE WIN" : "YOU WIN"),
     });
   }
-  if (!instant && payout > 0) {
+  if (!instant && comped) {
+    /* the comp gets its own small celebration and its own float: the ordinary
+       one below would print a "$0 loss", which is exactly the wrong story */
+    sfx.win(1);
+    sfx.cash(1);
+    confetti(30);
+    toast("ON THE HOUSE \\u2014 the floor manager eats that one. " + fmt(roundStake) + " back on the pile.", "gold", 3600);
+    floatAtElement(topbar.money, "+" + fmt(roundStake), "win");
+  } else if (!instant && payout > 0) {
     floatAtElement(topbar.money, (profit > 0 ? "+" : "") + fmt(profit), profit > 0 ? "win" : "lose");
   }
   if (levels.length) {
@@ -300,7 +425,7 @@ async function playRound(instant = false, opts = {}) {
   }
 
   saveState();
-  checkLoanGoal();
+  checkLoanReady();
   if (!state.infMoney) {
     if (state.money <= 0.004 && !state.loan.active) handleBankrupt();
     else if (state.money <= 0.004 && state.loan.active) failLoanFlow();
@@ -376,7 +501,8 @@ function buildNav() {
   topbar.nav.appendChild(el("div", { class: "nav-head", text: "The Floor" }));
   const edges = {
     slots: "return 95.7% \u00B7 max 200x",
-    "slots-multi": "return 93% \u00B7 max 1000x",
+    "slots-multi": "return 93.6% \u00B7 max 1000x \u00B7 own jackpot",
+    "slots-wheel": "return 96.4% \u00B7 x25 wheel \u00B7 own jackpot",
     roulette: "house edge 2.7%",
     blackjack: "house edge 0.5% \u00B7 no perks",
     horse: "house edge 8%",
@@ -384,7 +510,7 @@ function buildNav() {
     arcade: "beat it \u00B7 take " + Math.round(CONFIG.arcadeWinShare * 100) + "% \u00B7 no idle",
     frogger: "timing \u00B7 10 islands \u00B7 no idle",
     memory: "fitted ladder \u00B7 table max \u00B7 no idle",
-    chest: "house edge 10% \u00B7 4 of 20 pay",
+    chest: "house edge 6.25% \u00B7 4 of 9 pay",
     revolver: "10 rungs \u00B7 house edge 8.3% \u00B7 no idle",
     holdem: "seat charge 3% \u00B7 beat the bots",
   };
@@ -452,7 +578,10 @@ let betInput, playBtn, noteEl, statsEl, betTotalEl, historyEl, tableMiniEl;
    It is always the SAME element, reparented on the media query, so machines keep
    disabling/labelling `playBtn` by reference. */
 const playBar = el("div", { class: "playbar", hidden: true });
-const wideLayout = window.matchMedia("(min-width:901px)");
+/* kept in step with `@media (max-width:1040px)` in styles.css: below that the
+   layout is a single column and the bet panel sits under the stage, so the
+   play button belongs back inside it there. */
+const wideLayout = window.matchMedia("(min-width:1041px)");
 function placePlayButton() {
   if (!playBtn) return;
   if (wideLayout.matches) {
@@ -464,6 +593,11 @@ function placePlayButton() {
   }
 }
 wideLayout.addEventListener("change", placePlayButton);
+/* Belt and braces: a window resize always re-runs the placement, so the button
+   can never be left inside a bar the CSS has just hidden (the media-query
+   change event alone is enough in a normal browser, but this costs nothing --
+   the function is idempotent). */
+window.addEventListener("resize", placePlayButton);
 
 function buildBetPanel() {
   clear(topbar.betPanel);
@@ -882,12 +1016,33 @@ async function idleLoop() {
 /* =========================================================
    loans / bankruptcy
    ========================================================= */
+/* ---- the loan bar ----
+
+   The bar is the loan's whole live UI: the clock, a progress fill that measures
+   the player's balance against what they owe, and a PAY BACK button that is
+   always on screen while a loan is live, so the debt can be settled at any
+   moment. The debt is NOT snatched out of the balance the instant the player can
+   afford it any more -- they asked to be given the choice -- so a loan is only
+   ended by (a) the player pressing a button (here, or in the Loan Status modal),
+   (b) the clock reaching zero with the balance able to cover it
+   (settleLoanAtDeadline), or (c) a default. `repayReady` is the state the bar is
+   painted from; `repayOfferFor` holds the `takenAt` of the loan whose one-time
+   offer has already been raised, so a new loan gets its own offer and the same
+   loan is never nagged about twice. */
+let repayReady = false;
+let repayOfferFor = 0;
+
 function updateLoanUI() {
   const L = state.loan;
-  if (!L.active) { topbar.loanBar.hidden = true; return; }
-  topbar.loanBar.hidden = false;
+  const bar = topbar.loanBar;
+  if (!L.active) {
+    if (!bar.hidden) bar.hidden = true;
+    bar.classList.remove("ready");
+    repayReady = false;
+    return;
+  }
+  bar.hidden = false;
   const ms = loanRemainingMs();
-  const total = CONFIG.loanMinutes * 60000;
   const secs = Math.ceil(ms / 1000);
   const hh = Math.floor(secs / 3600);
   const mm = Math.floor((secs % 3600) / 60);
@@ -895,34 +1050,129 @@ function updateLoanUI() {
   topbar.loanClock.textContent = (hh > 0 ? hh + ":" : "") + String(mm).padStart(2, "0") + ":" + String(ss).padStart(2, "0");
   topbar.loanClock.classList.toggle("warn", secs <= 300);
   topbar.loanFill.style.width = clamp((state.money / L.repay) * 100, 0, 100).toFixed(1) + "%";
+
+  /* "ready" is the one state the player cares about: the balance could clear the
+     debt right now. It turns the bar and the button gold, puts the figure on the
+     button, and swaps the sentence to the two ways out. */
+  repayReady = state.money >= L.repay;
+  bar.classList.toggle("ready", repayReady);
+  const btn = topbar.loanRepayBtn;
+  if (btn) {
+    btn.classList.toggle("ready", repayReady);
+    btn.classList.toggle("short", !repayReady);
+    btn.textContent = repayReady ? "PAY BACK " + fmt(L.repay) : "PAY BACK";
+    btn.title = repayReady
+      ? "Hand over " + fmt(L.repay) + " and end the loan now"
+      : "You need " + fmt(L.repay) + " to clear the loan \u2014 you have " + fmt(state.money);
+  }
   clear(topbar.loanText);
-  topbar.loanText.appendChild(el("span", { html:
-    "Repay <b>" + fmt(L.repay) + "</b> before the clock runs out \u2014 you have <b>" + fmt(state.money) + "</b>. " +
-    "Default and every perk, level and chip is gone." }));
+  topbar.loanText.appendChild(el("span", { html: repayReady
+    ? "You can settle this whenever you like \u2014 <b>" + fmt(L.repay) + "</b> of your <b>" + fmt(state.money) + "</b>. " +
+      "Press PAY BACK, or leave it to the clock at 00:00. <b>Get back under " + fmt(L.repay) + " and you default.</b>"
+    : "Repay <b>" + fmt(L.repay) + "</b> before the clock runs out \u2014 you have <b>" + fmt(state.money) + "</b>. " +
+      "Default and every perk, level and chip is gone." }));
 }
 
-function checkLoanGoal() {
+/* Reaching the repay target does not pay the debt off by itself any more: it
+   raises the one-time offer below and then leaves the decision -- and the whole
+   balance -- alone. Called after every round and every tick. */
+function checkLoanReady() {
+  const L = state.loan;
+  if (!L.active) return;
+  updateLoanUI();
+  if (!repayReady || repayOfferFor === L.takenAt || endModalOpen) return;
+  /* don't stack the offer on top of a window the player is already reading --
+     it waits for the next tick, when the layer is clear again */
+  const layer = document.getElementById("modalLayer");
+  if (layer && !layer.hidden) return;
+  repayOfferFor = L.takenAt;
+  showLoanReadyOffer();
+}
+
+/* the "you can pay the loan back now" window: pay it, or let the clock do it */
+function showLoanReadyOffer() {
+  const L = state.loan;
+  modal({
+    title: "You can pay the loan back now",
+    width: 620,
+    body: el("div", {},
+      el("div", { class: "gameover-emoji", text: "\u{1F4B0}" }),
+      el("div", { class: "gameover-sub", text: "Your balance has reached the repay target. The debt is settled whenever you say \u2014 or by the clock when it runs out." }),
+      el("div", { class: "offerbox" },
+        offerCell("You owe", fmt(L.repay)),
+        offerCell("Your balance", fmt(state.money)),
+        offerCell("Time left", clockText(loanRemainingMs()))
+      ),
+      el("div", { class: "loanrules", html:
+        "You do <b>not</b> have to hand it over now. Leave it and <b>the clock does it for you</b>: when the timer reaches 00:00 the <b>" +
+        fmt(L.repay) + "</b> comes straight out of your balance and the loan ends \u2014 play on exactly as normal until then. " +
+        "<span class='danger'>The money is still yours to bet in the meantime, though, and if the balance is under <b>" +
+        fmt(L.repay) + "</b> when the clock runs out, you default: every perk, level and chip is gone.</span>" })
+    ),
+    buttons: [
+      { label: "PAY BACK NOW", cls: "gold", onClick: () => payLoanNow() },
+      { label: "LET THE CLOCK DO IT", cls: "ghost" },
+    ],
+  });
+}
+
+/* The player pressing a button. `repayLoan` re-checks affordability itself, so a
+   balance that slipped back under the target while the offer sat on screen is
+   reported rather than quietly doing nothing. */
+function payLoanNow() {
+  if (!state.loan.active) return false;
+  const L = state.loan;
+  const cleared = repayLoan();
+  if (!cleared) {
+    toast("You need " + fmt(L.repay) + " to settle it \u2014 you have " + fmt(state.money) + " right now.", "lose", 3800);
+    updateLoanUI();
+    return false;
+  }
+  toast("LOAN REPAID \u2014 " + fmt(cleared.repay) + " cleared. You're free.", "gold", 4200);
+  confetti(80);
+  renderTop();
+  return true;
+}
+
+/* the bar's PAY BACK button. Handing over the player's own money is worth one
+   confirmation, and the dialog says plainly that doing nothing is also fine. */
+async function tryRepayNow() {
   if (!state.loan.active) return;
-  if (state.money >= state.loan.repay) {
+  const L = state.loan;
+  if (!canAfford(L.repay)) {
+    toast("You still need " + fmt(L.repay - state.money) + " to clear the loan \u2014 leave it to the clock and it settles itself at 00:00.", "lose", 4200);
+    return;
+  }
+  const ok = await confirmDialog("Pay the loan back now?",
+    "This takes " + fmt(L.repay) + " out of your " + fmt(state.money) + " balance and ends the loan straight away. " +
+    "You can also leave it alone: a loan still standing when the clock runs out is paid out of your balance automatically.",
+    "PAY " + fmt(L.repay), "gold");
+  if (!ok) return;
+  payLoanNow();
+}
+
+/* The clock ran out with the loan still standing -- the "let it do it by itself"
+   half of the bargain. If the balance covers the debt it is paid and the player
+   carries on; if it does not, the loan defaults. */
+function settleLoanAtDeadline() {
+  if (!state.loan.active) return;
+  if (state.money >= state.loan.repay || state.infMoney) {
     const cleared = repayLoan();
     if (cleared) {
-      toast("LOAN REPAID \u2014 " + fmt(cleared.repay) + " cleared. You're free.", "gold", 4200);
-      confetti(80);
+      toast("The clock ran out \u2014 the loan settled itself: " + fmt(cleared.repay) + " taken from your balance.", "gold", 4800);
+      confetti(50);
       renderTop();
     }
+  } else {
+    failLoanFlow();
   }
 }
 
 function tick() {
-  if (state.loan.active) {
-    updateLoanUI();
-    checkLoanGoal();
-    if (loanExpired()) {
-      if (state.money >= state.loan.repay) { checkLoanGoal(); }
-      else if (state.infMoney) { repayLoan(); }
-      else failLoanFlow();
-    }
-  }
+  if (!state.loan.active) return;
+  if (loanExpired()) { settleLoanAtDeadline(); return; }
+  updateLoanUI();
+  checkLoanReady();
 }
 
 function handleBankrupt() {
@@ -1084,7 +1334,7 @@ function reportNode() {
 }
 
 function openRunReport({ broke = false } = {}) {
-  const principal = loanPrincipal();
+  const principal = loanPrincipal(loanBoost());
   const repay = loanRepay(principal);
   const canLoan = !state.loan.active;
 
@@ -1116,7 +1366,7 @@ function openRunReport({ broke = false } = {}) {
   if (canLoan) buttons.push({ label: "TAKE THE LOAN", cls: "gold", keepOpen: true, onClick: (m) => {
     m.close();
     endModalOpen = false;
-    const loan = takeLoan();
+    const loan = takeLoan(loanBoost());
     if (state.bet < 1) setBet(10);
     tooltipLoan(loan);
     renderTop();
@@ -1143,7 +1393,7 @@ function openLoanModal() {
     const canRepay = canAfford(L.repay);
     const body = el("div", {},
       el("div", { class: "gameover-emoji", text: "\u{1F3E6}" }),
-      el("div", { class: "gameover-sub", text: "The clock is still running. Reach the repay target and the debt clears itself." }),
+      el("div", { class: "gameover-sub", text: "The clock is still running. Reach the repay target and you can settle it whenever you like." }),
       el("div", { class: "offerbox" },
         offerCell("Principal", fmt(L.principal)),
         offerCell("You must repay", fmt(L.repay)),
@@ -1153,8 +1403,8 @@ function openLoanModal() {
       el("div", { class: "loanrules", html:
         "Your balance is <b>" + fmt(state.money) + "</b> of the <b>" + fmt(L.repay) + "</b> you owe. " +
         (canRepay
-          ? "You can settle it right now if you want."
-          : "Keep playing \u2014 hitting the target pays it off automatically. " +
+          ? "You can settle it right now if you want \u2014 or leave it and the clock takes the <b>" + fmt(L.repay) + "</b> out of your balance when it hits 00:00."
+          : "Keep playing \u2014 reach the target and you can pay it back on the spot or leave the clock to do it. " +
             "<span class='danger'>Hit zero before then and you lose every perk and level.</span>")
       })
     );
@@ -1164,10 +1414,7 @@ function openLoanModal() {
       body,
       buttons: canRepay
         ? [
-            { label: "REPAY " + fmt(L.repay) + " NOW", cls: "gold", onClick: () => {
-                const cleared = repayLoan();
-                if (cleared) { toast("LOAN REPAID \u2014 " + fmt(cleared.repay) + " cleared. You're free.", "gold", 3600); confetti(70); renderTop(); }
-              } },
+            { label: "PAY BACK " + fmt(L.repay) + " NOW", cls: "gold", onClick: () => { payLoanNow(); } },
             { label: "KEEP PLAYING", cls: "ghost" },
           ]
         : [{ label: "KEEP PLAYING", cls: "gold" }],
@@ -1175,7 +1422,7 @@ function openLoanModal() {
     return;
   }
 
-  const principal = loanPrincipal();
+  const principal = loanPrincipal(loanBoost());
   const repay = loanRepay(principal);
   modal({
     title: "The Loan Window",
@@ -1189,13 +1436,14 @@ function openLoanModal() {
         offerCell("Time limit", CONFIG.loanMinutes + ":00", "real time, ticking while you play")
       ),
       el("div", { class: "loanrules", html:
-        "Get your balance to <b>" + fmt(repay) + "</b> and the debt clears automatically (the " + fmt(repay) +
-        " is deducted). <span class='danger'>If the timer hits zero first, or you hit zero while the loan is live, you lose every perk, every level and all progress.</span>"
+        "Get your balance to <b>" + fmt(repay) + "</b> and you are safe: hand the <b>" + fmt(repay) +
+        "</b> over whenever you like with the <b>PAY BACK</b> button on the loan bar, or leave it and the clock takes it out of your balance when it reaches 00:00. " +
+        "<span class='danger'>If the balance is under " + fmt(repay) + " when the timer hits zero, or you hit zero while the loan is live, you lose every perk, every level and all progress.</span>"
       })
     ),
     buttons: [
       { label: "TAKE THE LOAN (" + fmt(principal) + ")", cls: "gold", onClick: () => {
-          const loan = takeLoan();
+          const loan = takeLoan(loanBoost());
           if (state.bet < 1) setBet(10);
           tooltipLoan(loan);
           renderTop();
@@ -1284,9 +1532,12 @@ function openPerkShop() {
     .join(", ");
   const body = el("div", {}, banner, el("p", { class: "shop-note", html:
     "Perks are permanent for the run and <b>stack</b> on every purchase. Stack caps: " + caps + ". " +
-    "Fat Stacks and Safety Net pay on your <b>stake</b>, never on the payout, so they cushion your losses without ever riding a jackpot. " +
-    "<b>Fortune</b> never caps: each stack lifts the <b>profit on a winning round</b> by " + (CONFIG.profitStack * 100).toFixed(1) + "%, forever \u2014 same odds, bigger reward \u2014 and the price climbs with every stack. " +
-    "<b>MAX ALL PERKS</b> instantly maxes every capped perk, but leaves endless Fortune alone."
+    "Fat Stacks and Safety Net pay on your <b>stake</b>, never on the payout, so they cushion your losses without ever riding a jackpot \u2014 and between them they can hand back at most <b>" + (CONFIG.perkBudget * 100).toFixed(1) + "% of the stake on one round</b>, the pit's rake-back budget, which sits under the thinnest edge in the building. You can claw back a slice of the house's edge; you cannot take all of it. " +
+    "<b>Fortune</b> is the exception and never caps: each stack lifts the <b>profit on a winning round</b> by " + (CONFIG.profitStack * 100).toFixed(1) + "%, forever \u2014 same odds, bigger reward \u2014 and the price climbs with every stack. " +
+    "The pit's little favours sit at the end of the shelf: <b>Gambler</b> lifts the house table limit " +
+    "(a bigger felt, never better odds), <b>On the House</b> occasionally eats a losing round whole, " +
+    "<b>Pit Boss's Nephew</b> stretches your credit line, and <b>Showboat</b> is pure spectacle \u2014 it pays nothing at all. " +
+    "Hover a card's <b>i</b> (or tap it) for that perk's full write-up."
   }), grid);
 
   function renderBanner() {
@@ -1299,10 +1550,77 @@ function openPerkShop() {
       el("div", { class: "item" }, el("b", { text: "+" + (eff.profitBonus * 100).toFixed(1) + "%" }), "profit"),
       el("div", { class: "item" }, el("b", { text: "+" + (eff.luck * 100).toFixed(1) + "%" }), "luck"),
       el("div", { class: "item" }, el("b", { text: "+" + ((eff.xpMult - 1) * 100).toFixed(0) + "%" }), "xp"),
-      el("div", { class: "item" }, el("b", { text: "+" + ((eff.idleSpeed - 1) * 100).toFixed(0) + "%" }), "idle speed")
+      el("div", { class: "item" }, el("b", { text: "+" + ((eff.idleSpeed - 1) * 100).toFixed(0) + "%" }), "idle speed"),
+      el("div", { class: "item" }, el("b", { text: (eff.compChance * 100).toFixed(0) + "%" }), "losses comped"),
+      el("div", { class: "item" }, el("b", { text: game ? fmt(tableLimit()) : "\u2014" }), "table limit")
     ));
     banner.appendChild(el("div", { style: { fontSize: "11px", color: "#8b98b4" }, text: "Level " + state.level + " \u00B7 " + state.stats.plays + " hands played" }));
   }
+
+  /* ---- the info window ----
+     Each perk's real write-up (why it exists, what it pays on, where it stops) is
+     a paragraph of prose -- far too much for a card two inches wide, which is why
+     the old inline copy was clipped where the card ran out. The prose now lives in
+     this one floating window, which opens on hover of a card's header and follows
+     its card if the shelf scrolls. It is pointer-events:none so it can never sit
+     between the player and a BUY button, and the little badge pins it open for
+     touch and keyboard, where "hover" does not exist. */
+  const pop = el("div", { class: "perk-pop", hidden: true });
+  const cardById = {};
+  let popped = false;     /* the window is on screen */
+  let popPinned = false;  /* it was opened by click/focus, so leaving the card leaves it up */
+  let popId = null;       /* which perk it is showing */
+  let popAnchor = null;   /* the card element it belongs to */
+
+  function placePop() {
+    if (!popAnchor || pop.hidden) return;
+    const r = popAnchor.getBoundingClientRect();
+    const w = pop.offsetWidth, h = pop.offsetHeight, pad = 10;
+    const left = clamp(r.left + r.width / 2 - w / 2, pad, Math.max(pad, innerWidth - w - pad));
+    /* above the card by default, under it when the card is near the top of the
+       window -- and either way never off the edge, so a card half-scrolled out of
+       the shelf still gets a readable window instead of one hanging off-screen */
+    let top = r.top - h - 10;
+    const below = top < pad;
+    if (below) top = r.bottom + 10;
+    top = clamp(top, pad, Math.max(pad, innerHeight - h - pad));
+    pop.style.left = left + "px";
+    pop.style.top = top + "px";
+    pop.classList.toggle("below", below);
+  }
+
+  function showPop(id, anchor) {
+    const p = PERKS[id];
+    const n = stacksOf(id);
+    const maxed = isMaxed(id);
+    popped = true; popId = id; popAnchor = anchor;
+    clear(pop);
+    pop.appendChild(el("div", { class: "pp-head" },
+      el("div", { class: "pp-icon", text: p.icon }),
+      el("div", {},
+        el("div", { class: "pp-name", text: p.name }),
+        el("div", { class: "pp-stack", text: n + (p.max === Infinity ? " / \u221E stacks" : " / " + p.max + " stacks") })
+      )
+    ));
+    pop.appendChild(el("div", { class: "pp-body", text: p.blurb }));
+    pop.appendChild(el("div", { class: "pp-now", text: n > 0 ? "Now: " + p.stacks(n) + "." : "First stack: " + p.stacks(1) + "." }));
+    if (maxed) pop.appendChild(el("div", { class: "pp-max", text: "Fully stacked \u2014 there is nothing left to buy here." }));
+    pop.hidden = false;
+    placePop();
+  }
+
+  function hidePop() {
+    popped = false; popPinned = false; popId = null; popAnchor = null;
+    pop.hidden = true;
+  }
+
+  document.body.appendChild(pop);
+  addEventListener("scroll", placePop, true);
+  addEventListener("resize", placePop);
+  const popKey = (e) => { if (e.key === "Escape") hidePop(); };
+  const popDown = (e) => { if (popped && !(popAnchor && popAnchor.contains(e.target))) hidePop(); };
+  addEventListener("keydown", popKey);
+  addEventListener("pointerdown", popDown, true);
 
   function renderGrid() {
     clear(grid);
@@ -1313,16 +1631,42 @@ function openPerkShop() {
       const cost = perkCost(id);
       const afford = canAfford(cost);
       const card = el("div", { class: "perk" + (maxed ? " maxed" : "") });
+      cardById[id] = card;
 
-      card.appendChild(el("div", { class: "perk-top" },
+      const badge = el("button", {
+        class: "perk-info", type: "button",
+        "aria-label": "What " + p.name + " does",
+        onfocus: () => showPop(id, card),
+        onblur: () => { if (!popPinned) hidePop(); },
+        onclick: (e) => {
+          e.stopPropagation();
+          if (popped && popPinned && popId === id) hidePop();
+          else { popPinned = true; showPop(id, card); }
+        },
+      }, el("span", { class: "perk-i-glyph", text: "i" }));
+
+      const head = el("div", { class: "perk-top" },
         el("div", { class: "perk-icon", text: p.icon }),
         el("div", {},
           el("div", { class: "perk-name", text: p.name }),
           el("div", { class: "perk-stack", text: n + (p.max === Infinity ? " / \u221E stacks" : " / " + p.max + " stacks") })
-        )
-      ));
+        ),
+        badge
+      );
+      /* The card's long prose used to sit right here and got clipped by the card
+         it was in. Now the header row is the hover target: the window opens while
+         the pointer is on the icon, the name or the badge, and the badge alone
+         pins it open for touch and keyboard. */
+      head.addEventListener("mouseenter", () => { if (!popPinned) showPop(id, card); });
+      head.addEventListener("mouseleave", () => { if (!popPinned) hidePop(); });
+      card.appendChild(head);
 
-      card.appendChild(el("div", { class: "perk-desc", text: p.blurb + (n > 0 ? "  Now: " + p.stacks(n) + "." : "") }));
+      /* the one line the card keeps for itself: what this perk is doing right now
+         (or what the next stack would do), never the full argument */
+      card.appendChild(el("div", {
+        class: "perk-now" + (n > 0 ? " on" : ""),
+        text: (n > 0 ? "Now: " + p.stacks(n) : "Next: " + p.stacks(1)) + ".",
+      }));
 
       const pips = el("div", { class: "pips" });
       if (p.max === Infinity) {
@@ -1371,7 +1715,17 @@ function openPerkShop() {
     }
   }
 
-  function renderAll() { renderBanner(); renderGrid(); }
+  /* a re-render rebuilds every card, so an open window has to be re-hung on the
+     new element -- and dropped entirely if it is no longer wanted. A pinned window
+     survives the redraw (buying a stack must not close the write-up you are
+     reading), a hover one does not. */
+  function renderAll() {
+    const keep = popPinned ? popId : null;
+    renderBanner();
+    renderGrid();
+    if (keep && cardById[keep]) { showPop(keep, cardById[keep]); popPinned = true; }
+    else hidePop();
+  }
 
   renderAll();
   const offPerks = on("perks", renderAll);
@@ -1380,16 +1734,15 @@ function openPerkShop() {
     title: "Perk Shop",
     width: 780,
     body,
-    onClose: () => { offPerks(); offMoney(); },
+    onClose: () => {
+      offPerks(); offMoney();
+      removeEventListener("scroll", placePop, true);
+      removeEventListener("resize", placePop);
+      removeEventListener("keydown", popKey);
+      removeEventListener("pointerdown", popDown, true);
+      pop.remove();
+    },
     buttons: [
-      { label: "MAX ALL PERKS", cls: "green", keepOpen: true, onClick: () => {
-          const n = maxOutFinitePerks();
-          renderAll();
-          renderTop();
-          renderPayoutNote();
-          if (n > 0) { toast("Maxed every finite perk (+" + n + " stacks). Fortune stays endless.", "gold", 2800); confetti(55); }
-          else toast("All finite perks are already maxed.", "info", 1900);
-      } },
       { label: "NEW RUN (reset everything)", cls: "ghost", keepOpen: true, onClick: async (mm) => {
           const ok = await confirmDialog("Start a new run?", "This wipes your money, perks, level and stats back to the beginning.", "Reset", "red");
           if (ok) { mm.close(); doReset(); }
@@ -1412,6 +1765,7 @@ topbar.idleBet.addEventListener("change", () => {
 });
 topbar.shopBtn.addEventListener("click", openPerkShop);
 topbar.loanBtn.addEventListener("click", openLoanModal);
+if (topbar.loanRepayBtn) topbar.loanRepayBtn.addEventListener("click", tryRepayNow);
 topbar.historyBtn.addEventListener("click", openHistoryModal);
 topbar.bankruptBtn.addEventListener("click", () => {
   if (endModalOpen) return;
@@ -1526,7 +1880,7 @@ const cheatBtn = document.getElementById("cheatBtn");
    walks around it — this just stops the password from being readable at a glance.
    The unlock lasts for the session (it resets on reload) and wrong guesses are
    rate-limited. To change the password: sha256 the new one and paste the hex here. */
-const ADMIN_PASS_HASH = "3992b59e3ebc1716f71006b79712822c2938938b89b97af1359d07c424656fe1";
+const ADMIN_PASS_HASH = "98bf21d864fc1a9dbf3270eccd36c317e917c6accb6d9a02576fe1c5841cbd41";
 const ADMIN_MAX_TRIES = 3;
 const ADMIN_LOCKOUT_MS = 30000;
 let adminUnlocked = false;
@@ -1807,8 +2161,14 @@ window.casino = {
 };
 
 if (loanExpired()) {
-  if (state.infMoney && repayLoan()) {
-    toast("Loan cleared \u2014 \u221E money had it covered.", "gold", 3600);
+  /* The clock ran out while the tab was closed. Settle it the same way
+     settleLoanAtDeadline would: out of the balance if that covers the debt,
+     otherwise a default. (It used to fail the loan on sight, which contradicted
+     the "leave it and the clock does it for you" promise the loan now makes.) */
+  const cleared = (state.money >= state.loan.repay || state.infMoney) ? repayLoan() : false;
+  if (cleared) {
+    toast("The clock ran out while you were away \u2014 the loan settled itself: " + fmt(cleared.repay) + " taken from your balance.", "gold", 5600);
+    renderTop();
   } else {
     failLoanFlow();
   }
